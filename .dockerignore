@@ -1,0 +1,22 @@
+
+vendor/
+*.test
+*.log
+tmp/
+temp/
+main # If you build the executable inside the container
+
+.git/
+.gitignore
+.dockerignore # Although sent to the daemon, it won't be copied to the image
+.idea/
+.vscode/
+
+
+build/
+dist/
+
+documents/
+*.md
+*.txt
+*.json

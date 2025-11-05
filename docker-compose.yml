@@ -1,0 +1,40 @@
+name: throttle
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: throttle-app
+    ports:
+      - "${APP_PORT:-3000}:${APP_PORT:-3000}"
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      - APP_VERSION=${APP_VERSION}
+    depends_on:
+      - redis
+    networks:
+      - throttle-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:latest
+    container_name: throttle-redis
+    ports:
+      - "${REDIS_PORT:-6379}:${REDIS_PORT:-6379}"
+    volumes:
+      - redis_data:/data
+    networks:
+      - throttle-network
+    restart: unless-stopped
+
+networks:
+  throttle-network:
+    name: throttle-network
+    driver: bridge
+
+volumes:
+  redis_data:
