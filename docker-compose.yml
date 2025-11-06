@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
     container_name: throttle-app
     ports:
-      - "${APP_PORT:-3000}:${APP_PORT:-3000}"
+      - "${APP_PORT:-3000}:3000"
     volumes:
       - .:/app
     env_file:
@@ -24,7 +24,7 @@ services:
     image: redis:latest
     container_name: throttle-redis
     ports:
-      - "${REDIS_PORT:-6379}:${REDIS_PORT:-6379}"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     networks:
