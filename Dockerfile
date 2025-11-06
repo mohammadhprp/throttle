@@ -1,15 +1,22 @@
-FROM golang:1.24-alpine
+FROM golang:1.24-alpine AS builder
 
-WORKDIR /build
+WORKDIR /app
 
-ENV GOSUMDB=off
-
-COPY go.mod go.sum ./
+COPY go.mod ./
 RUN go mod download
 
 COPY . .
 
-ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
-RUN go build -ldflags="-s -w" -o server .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o server ./cmd/server
 
-ENTRYPOINT ["/build/server"]
+# Runtime stage
+FROM alpine:3.20
+
+WORKDIR /app
+
+COPY --from=builder /app/server ./server
+
+ENV APP_PORT=3000
+EXPOSE 3000
+
+ENTRYPOINT ["/app/server"]
