@@ -11,9 +11,9 @@ import (
 // NewRedisClient returns a Redis client configured from the provided settings.
 func NewRedisClient(cfg Config) (*redis.Client, error) {
 	options := &redis.Options{
-		Addr:     fmt.Sprintf("%s:%s", cfg.RedisHost, cfg.RedisPort),
-		Password: cfg.RedisPassword,
-		DB:       cfg.RedisDB,
+		Addr:     fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port),
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
 	}
 
 	client := redis.NewClient(options)
