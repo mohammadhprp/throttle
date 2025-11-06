@@ -14,10 +14,10 @@ type Store interface {
 	IncrementBy(ctx context.Context, key string, value int64, expiration time.Duration) (int64, error)
 
 	// Get retrieves the current value for the given key
-	Get(ctx context.Context, key string) (int64, error)
+	Get(ctx context.Context, key string) (string, error)
 
 	// Set sets the value for the given key with expiration
-	Set(ctx context.Context, key string, value int64, expiration time.Duration) error
+	Set(ctx context.Context, key string, value string, expiration time.Duration) error
 
 	// Delete removes the key from storage
 	Delete(ctx context.Context, key string) error

@@ -65,21 +65,21 @@ func (s *RedisStore) IncrementBy(ctx context.Context, key string, value int64, e
 }
 
 // Get retrieves the current value for the given key
-func (s *RedisStore) Get(ctx context.Context, key string) (int64, error) {
-	val, err := s.client.Get(ctx, key).Int64()
+func (s *RedisStore) Get(ctx context.Context, key string) (string, error) {
+	val, err := s.client.Get(ctx, key).Result()
 	if err == redis.Nil {
-		return 0, nil
+		return "", nil
 	}
 	if err != nil {
-		return 0, fmt.Errorf("failed to get key: %w", err)
+		return "", fmt.Errorf("failed to get string key: %w", err)
 	}
 	return val, nil
 }
 
 // Set sets the value for the given key with expiration
-func (s *RedisStore) Set(ctx context.Context, key string, value int64, expiration time.Duration) error {
+func (s *RedisStore) Set(ctx context.Context, key string, value string, expiration time.Duration) error {
 	if err := s.client.Set(ctx, key, value, expiration).Err(); err != nil {
-		return fmt.Errorf("failed to set key: %w", err)
+		return fmt.Errorf("failed to set string key: %w", err)
 	}
 	return nil
 }
