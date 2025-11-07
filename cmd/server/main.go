@@ -3,17 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/gorilla/mux"
-
 	"github.com/mohammadhprp/throttle/internal/config"
-	"github.com/mohammadhprp/throttle/internal/handler"
 	"github.com/mohammadhprp/throttle/internal/storage"
+	"github.com/mohammadhprp/throttle/internal/transport"
 	"go.uber.org/zap"
 )
 
@@ -30,9 +27,9 @@ func main() {
 	}
 	defer logger.Sync()
 
-	logger.Info("Starting distributed rate limiter server",
+	logger.Info("Starting distributed rate limiter HTTP server",
 		zap.String("version", "1.0.0"),
-		zap.String("address", cfg.ServerAddr()),
+		zap.String("address", cfg.HTTPServerAddr()),
 	)
 
 	// Initialize Redis store
@@ -44,30 +41,20 @@ func main() {
 
 	logger.Info("Connected to Redis", zap.String("address", cfg.RedisAddr()))
 
-	// Initialize router
-	router := mux.NewRouter()
+	// Create HTTP server using factory function
+	srv := transport.NewHTTPServer(transport.ServerConfig{
+		Address:      cfg.HTTPServerAddr(),
+		Store:        store,
+		Logger:       logger,
+		ReadTimeout:  int(cfg.HTTPServer.ReadTimeout.Seconds()),
+		WriteTimeout: int(cfg.HTTPServer.WriteTimeout.Seconds()),
+		IdleTimeout:  int(cfg.HTTPServer.IdleTimeout.Seconds()),
+	})
 
-	healthCheckHanlder := handler.NewHealthCheckHanlder(store, logger)
-
-	// Health check endpoint
-	router.HandleFunc("/health", healthCheckHanlder.HealthCheck()).Methods("GET")
-
-	// Configure server
-	srv := &http.Server{
-		Addr:         cfg.ServerAddr(),
-		Handler:      router,
-		ReadTimeout:  cfg.Server.ReadTimeout,
-		WriteTimeout: cfg.Server.WriteTimeout,
-		IdleTimeout:  cfg.Server.IdleTimeout,
+	// Start server
+	if err := srv.Start(context.Background()); err != nil {
+		logger.Fatal("Failed to start HTTP server", zap.Error(err))
 	}
-
-	// Start server in goroutine
-	go func() {
-		logger.Info("Server listening", zap.String("address", srv.Addr))
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatal("Server failed", zap.Error(err))
-		}
-	}()
 
 	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)
@@ -80,7 +67,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Stop(ctx); err != nil {
 		logger.Error("Server forced to shutdown", zap.Error(err))
 	}
 
