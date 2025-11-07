@@ -106,12 +106,6 @@ func (tb *TokenBucket) Allow(ctx context.Context, key string) (bool, error) {
 		return true, err
 	}
 
-	tb.logger.Debug("token bucket decision",
-		zap.String("key", key),
-		zap.Bool("allowed", allowed),
-		zap.Float64("remaining_tokens", state.Tokens),
-	)
-
 	return allowed, nil
 }
 
@@ -141,7 +135,6 @@ func (tb *TokenBucket) getBucketState(ctx context.Context, stateKey string) (*to
 
 	// If the key doesn't exist (empty string), initialize with full bucket
 	if stateStr == "" {
-		tb.logger.Debug("initializing new bucket state", zap.String("key", stateKey))
 		return &tokenBucketState{
 			Tokens:       tb.maxTokens,
 			LastFillTime: time.Now().UnixNano(),
