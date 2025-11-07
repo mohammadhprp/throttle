@@ -27,9 +27,10 @@ func main() {
 	}
 	defer logger.Sync()
 
-	logger.Info("Starting distributed rate limiter HTTP server",
+	logger.Info("Starting distributed rate limiter servers",
 		zap.String("version", "1.0.0"),
-		zap.String("address", cfg.HTTPServerAddr()),
+		zap.String("http_address", cfg.HTTPServerAddr()),
+		zap.String("grpc_address", cfg.GRPCServerAddr()),
 	)
 
 	// Initialize Redis store
@@ -42,7 +43,7 @@ func main() {
 	logger.Info("Connected to Redis", zap.String("address", cfg.RedisAddr()))
 
 	// Create HTTP server using factory function
-	srv := transport.NewHTTPServer(transport.ServerConfig{
+	httpSrv := transport.NewHTTPServer(transport.ServerConfig{
 		Address:      cfg.HTTPServerAddr(),
 		Store:        store,
 		Logger:       logger,
@@ -51,9 +52,21 @@ func main() {
 		IdleTimeout:  int(cfg.HTTPServer.IdleTimeout.Seconds()),
 	})
 
-	// Start server
-	if err := srv.Start(context.Background()); err != nil {
+	// Create gRPC server using factory function
+	grpcSrv := transport.NewGRPCServer(transport.ServerConfig{
+		Address: cfg.GRPCServerAddr(),
+		Store:   store,
+		Logger:  logger,
+	})
+
+	// Start HTTP server
+	if err := httpSrv.Start(context.Background()); err != nil {
 		logger.Fatal("Failed to start HTTP server", zap.Error(err))
+	}
+
+	// Start gRPC server
+	if err := grpcSrv.Start(context.Background()); err != nil {
+		logger.Fatal("Failed to start gRPC server", zap.Error(err))
 	}
 
 	// Wait for interrupt signal
@@ -61,15 +74,20 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	logger.Info("Shutting down server...")
+	logger.Info("Shutting down servers...")
 
 	// Graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := srv.Stop(ctx); err != nil {
-		logger.Error("Server forced to shutdown", zap.Error(err))
+	// Stop both servers
+	if err := httpSrv.Stop(ctx); err != nil {
+		logger.Error("HTTP server forced to shutdown", zap.Error(err))
 	}
 
-	logger.Info("Server stopped")
+	if err := grpcSrv.Stop(ctx); err != nil {
+		logger.Error("gRPC server forced to shutdown", zap.Error(err))
+	}
+
+	logger.Info("Servers stopped")
 }
