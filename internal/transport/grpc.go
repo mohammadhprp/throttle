@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/mohammadhprp/throttle/internal/handler"
-	pb "github.com/mohammadhprp/throttle/proto"
+	pb "github.com/mohammadhprp/throttle/proto/health"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )

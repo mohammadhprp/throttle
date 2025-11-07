@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package throttle.v1;
 
-option go_package = "github.com/mohammadhprp/throttle/proto";
+option go_package = "github.com/mohammadhprp/throttle/proto/health";
 
 // Health service for gRPC health checks
 service Health {
