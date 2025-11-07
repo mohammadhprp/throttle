@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -41,4 +42,9 @@ func (h *HealthCheckHanlder) HealthCheck() http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(status)
 	}
+}
+
+// Ping verifies connectivity with the underlying store for non-HTTP health checks.
+func (h *HealthCheckHanlder) Ping(ctx context.Context) error {
+	return h.store.Ping(ctx)
 }
