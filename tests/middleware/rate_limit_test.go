@@ -29,6 +29,27 @@ func newTestRateLimiter(t *testing.T, refillRate float64, refillInterval time.Du
 	return limiter.NewTokenBucket(store, refillRate, refillInterval, maxTokens, logger)
 }
 
+// newTestFixedWindowLimiter creates a fixed window rate limiter for testing
+func newTestFixedWindowLimiter(t *testing.T, maxRequests int64, windowDuration time.Duration) limiter.RateLimiter {
+	store := storage.NewMemoryStore()
+	logger := newTestLogger(t)
+	return limiter.NewFixedWindow(store, maxRequests, windowDuration, logger)
+}
+
+// newTestLeakyBucketLimiter creates a leaky bucket rate limiter for testing
+func newTestLeakyBucketLimiter(t *testing.T, capacity int64, leakRate int64, leakInterval time.Duration) limiter.RateLimiter {
+	store := storage.NewMemoryStore()
+	logger := newTestLogger(t)
+	return limiter.NewLeakyBucket(store, capacity, leakRate, leakInterval, logger)
+}
+
+// newTestSlidingWindowLimiter creates a sliding window rate limiter for testing
+func newTestSlidingWindowLimiter(t *testing.T, maxRequests int64, windowDuration time.Duration) limiter.RateLimiter {
+	store := storage.NewMemoryStore()
+	logger := newTestLogger(t)
+	return limiter.NewSlidingWindow(store, maxRequests, windowDuration, logger)
+}
+
 // TestRateLimitMiddleware_AllowedRequest tests that allowed requests pass through
 func TestRateLimitMiddleware_AllowedRequest(t *testing.T) {
 	rl := newTestRateLimiter(t, 10, time.Second, 10)
@@ -708,5 +729,383 @@ func TestPathKeyExtractor_DifferentPaths(t *testing.T) {
 
 	if key1 == key2 {
 		t.Errorf("expected different keys for different paths")
+	}
+}
+
+// ============================================================================
+// Tests for FixedWindow Rate Limiter with Middleware
+// ============================================================================
+
+func TestRateLimitMiddleware_FixedWindowAllow(t *testing.T) {
+	rl := newTestFixedWindowLimiter(t, 2, time.Second)
+	logger := newTestLogger(t)
+	defer logger.Sync()
+
+	mw := middleware.RateLimitMiddleware(rl, middleware.IPKeyExtractor, logger)
+
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("success"))
+	})
+
+	wrappedHandler := mw(testHandler)
+
+	// Make 2 requests (should succeed)
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest("GET", "http://example.com/test", nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		w := httptest.NewRecorder()
+		wrappedHandler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("request %d: expected status %d, got %d", i+1, http.StatusOK, w.Code)
+		}
+	}
+
+	// 3rd request should fail
+	req := httptest.NewRequest("GET", "http://example.com/test", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("expected status %d, got %d", http.StatusTooManyRequests, w.Code)
+	}
+}
+
+func TestRateLimitMiddleware_FixedWindowWindowReset(t *testing.T) {
+	rl := newTestFixedWindowLimiter(t, 2, 100*time.Millisecond)
+	logger := newTestLogger(t)
+	defer logger.Sync()
+
+	mw := middleware.RateLimitMiddleware(rl, middleware.IPKeyExtractor, logger)
+
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	wrappedHandler := mw(testHandler)
+
+	// Make 2 requests (should succeed)
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest("GET", "http://example.com/test", nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		w := httptest.NewRecorder()
+		wrappedHandler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("request %d: expected status %d, got %d", i+1, http.StatusOK, w.Code)
+		}
+	}
+
+	// 3rd request should fail
+	req := httptest.NewRequest("GET", "http://example.com/test", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("expected status %d, got %d", http.StatusTooManyRequests, w.Code)
+	}
+
+	// Wait for window to reset
+	time.Sleep(101 * time.Millisecond)
+
+	// Request should now succeed (new window)
+	req = httptest.NewRequest("GET", "http://example.com/test", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w = httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d after window reset, got %d", http.StatusOK, w.Code)
+	}
+}
+
+func TestRateLimitMiddleware_FixedWindowMultipleKeys(t *testing.T) {
+	rl := newTestFixedWindowLimiter(t, 2, time.Second)
+	logger := newTestLogger(t)
+	defer logger.Sync()
+
+	mw := middleware.RateLimitMiddleware(rl, middleware.IPKeyExtractor, logger)
+
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	wrappedHandler := mw(testHandler)
+
+	// IP1 makes 2 requests
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest("GET", "http://example.com/test", nil)
+		req.RemoteAddr = "192.168.1.1:12345"
+		w := httptest.NewRecorder()
+		wrappedHandler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("IP1 request %d: expected status %d, got %d", i+1, http.StatusOK, w.Code)
+		}
+	}
+
+	// IP2 makes 1 request (should succeed - different bucket)
+	req := httptest.NewRequest("GET", "http://example.com/test", nil)
+	req.RemoteAddr = "192.168.1.2:12345"
+	w := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("IP2 request: expected status %d, got %d", http.StatusOK, w.Code)
+	}
+}
+
+// ============================================================================
+// Tests for LeakyBucket Rate Limiter with Middleware
+// ============================================================================
+
+func TestRateLimitMiddleware_LeakyBucketAllow(t *testing.T) {
+	rl := newTestLeakyBucketLimiter(t, 3, 1, 100*time.Millisecond)
+	logger := newTestLogger(t)
+	defer logger.Sync()
+
+	mw := middleware.RateLimitMiddleware(rl, middleware.IPKeyExtractor, logger)
+
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("success"))
+	})
+
+	wrappedHandler := mw(testHandler)
+
+	// Make 3 requests (should succeed - within capacity)
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest("GET", "http://example.com/test", nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		w := httptest.NewRecorder()
+		wrappedHandler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("request %d: expected status %d, got %d", i+1, http.StatusOK, w.Code)
+		}
+	}
+
+	// 4th request should fail (bucket at capacity)
+	req := httptest.NewRequest("GET", "http://example.com/test", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("expected status %d, got %d", http.StatusTooManyRequests, w.Code)
+	}
+}
+
+func TestRateLimitMiddleware_LeakyBucketLeak(t *testing.T) {
+	rl := newTestLeakyBucketLimiter(t, 3, 1, 100*time.Millisecond)
+	logger := newTestLogger(t)
+	defer logger.Sync()
+
+	mw := middleware.RateLimitMiddleware(rl, middleware.IPKeyExtractor, logger)
+
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	wrappedHandler := mw(testHandler)
+
+	// Fill bucket with 3 requests
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest("GET", "http://example.com/test", nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		w := httptest.NewRecorder()
+		wrappedHandler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("request %d: expected status %d, got %d", i+1, http.StatusOK, w.Code)
+		}
+	}
+
+	// Bucket is full, next request should fail
+	req := httptest.NewRequest("GET", "http://example.com/test", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("expected status %d (bucket full), got %d", http.StatusTooManyRequests, w.Code)
+	}
+
+	// Wait for leak
+	time.Sleep(100 * time.Millisecond)
+
+	// Request should now succeed (1 request leaked)
+	req = httptest.NewRequest("GET", "http://example.com/test", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w = httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d after leak, got %d", http.StatusOK, w.Code)
+	}
+}
+
+func TestRateLimitMiddleware_LeakyBucketMultipleKeys(t *testing.T) {
+	rl := newTestLeakyBucketLimiter(t, 2, 1, 100*time.Millisecond)
+	logger := newTestLogger(t)
+	defer logger.Sync()
+
+	mw := middleware.RateLimitMiddleware(rl, middleware.IPKeyExtractor, logger)
+
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	wrappedHandler := mw(testHandler)
+
+	// IP1 fills bucket with 2 requests
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest("GET", "http://example.com/test", nil)
+		req.RemoteAddr = "192.168.1.1:12345"
+		w := httptest.NewRecorder()
+		wrappedHandler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("IP1 request %d: expected status %d, got %d", i+1, http.StatusOK, w.Code)
+		}
+	}
+
+	// IP2 makes request (should succeed - separate bucket)
+	req := httptest.NewRequest("GET", "http://example.com/test", nil)
+	req.RemoteAddr = "192.168.1.2:12345"
+	w := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("IP2 request: expected status %d, got %d", http.StatusOK, w.Code)
+	}
+}
+
+// ============================================================================
+// Tests for SlidingWindow Rate Limiter with Middleware
+// ============================================================================
+
+func TestRateLimitMiddleware_SlidingWindowAllow(t *testing.T) {
+	rl := newTestSlidingWindowLimiter(t, 2, time.Second)
+	logger := newTestLogger(t)
+	defer logger.Sync()
+
+	mw := middleware.RateLimitMiddleware(rl, middleware.IPKeyExtractor, logger)
+
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("success"))
+	})
+
+	wrappedHandler := mw(testHandler)
+
+	// Make 2 requests (should succeed)
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest("GET", "http://example.com/test", nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		w := httptest.NewRecorder()
+		wrappedHandler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("request %d: expected status %d, got %d", i+1, http.StatusOK, w.Code)
+		}
+	}
+
+	// 3rd request should fail
+	req := httptest.NewRequest("GET", "http://example.com/test", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("expected status %d, got %d", http.StatusTooManyRequests, w.Code)
+	}
+}
+
+func TestRateLimitMiddleware_SlidingWindowSlide(t *testing.T) {
+	rl := newTestSlidingWindowLimiter(t, 2, 100*time.Millisecond)
+	logger := newTestLogger(t)
+	defer logger.Sync()
+
+	mw := middleware.RateLimitMiddleware(rl, middleware.IPKeyExtractor, logger)
+
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	wrappedHandler := mw(testHandler)
+
+	// Make 2 requests
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest("GET", "http://example.com/test", nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		w := httptest.NewRecorder()
+		wrappedHandler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("request %d: expected status %d, got %d", i+1, http.StatusOK, w.Code)
+		}
+	}
+
+	// 3rd request should fail (window full)
+	req := httptest.NewRequest("GET", "http://example.com/test", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("expected status %d (window full), got %d", http.StatusTooManyRequests, w.Code)
+	}
+
+	// Wait for window to slide (oldest requests to fall out)
+	time.Sleep(101 * time.Millisecond)
+
+	// Request should now succeed (window slid)
+	req = httptest.NewRequest("GET", "http://example.com/test", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w = httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d after window slide, got %d", http.StatusOK, w.Code)
+	}
+}
+
+func TestRateLimitMiddleware_SlidingWindowMultipleKeys(t *testing.T) {
+	rl := newTestSlidingWindowLimiter(t, 2, time.Second)
+	logger := newTestLogger(t)
+	defer logger.Sync()
+
+	mw := middleware.RateLimitMiddleware(rl, middleware.IPKeyExtractor, logger)
+
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	wrappedHandler := mw(testHandler)
+
+	// IP1 makes 2 requests
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest("GET", "http://example.com/test", nil)
+		req.RemoteAddr = "192.168.1.1:12345"
+		w := httptest.NewRecorder()
+		wrappedHandler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("IP1 request %d: expected status %d, got %d", i+1, http.StatusOK, w.Code)
+		}
+	}
+
+	// IP2 makes 1 request (should succeed - different bucket)
+	req := httptest.NewRequest("GET", "http://example.com/test", nil)
+	req.RemoteAddr = "192.168.1.2:12345"
+	w := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("IP2 request: expected status %d, got %d", http.StatusOK, w.Code)
 	}
 }
