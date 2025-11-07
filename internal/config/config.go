@@ -12,9 +12,9 @@ import (
 
 // Config holds application configuration sourced from environment variables.
 type Config struct {
-	Server ServerConfig
-	Redis  RedisConfig
-	Log    LogConfig
+	HTTPServer HTTPServerConfig
+	Redis      RedisConfig
+	Log        LogConfig
 }
 
 // LogConfig contains logging settings
@@ -24,7 +24,7 @@ type LogConfig struct {
 }
 
 // ServerConfig contains HTTP server settings
-type ServerConfig struct {
+type HTTPServerConfig struct {
 	Host         string
 	Port         int
 	ReadTimeout  time.Duration
@@ -44,12 +44,12 @@ type RedisConfig struct {
 // Load reads environment variables into Config. It expects godotenv to have been
 // executed by the caller when needed (e.g. in development).
 func Load() Config {
-	sever := ServerConfig{
-		Host:         getEnv("APP_HOST", "0.0.0.0"),
-		Port:         getEnvAsInt("APP_PORT", 3000),
-		ReadTimeout:  getEnvAsDuration("APP_READ_TIMEOUT", 10*time.Second),
-		WriteTimeout: getEnvAsDuration("APP_WRITE_TIMEOUT", 10*time.Second),
-		IdleTimeout:  getEnvAsDuration("APP_IDLE_TIMEOUT", 10*time.Second),
+	httpServer := HTTPServerConfig{
+		Host:         getEnv("APP_HTTP_HOST", "0.0.0.0"),
+		Port:         getEnvAsInt("APP_HTTP_PORT", 3000),
+		ReadTimeout:  getEnvAsDuration("APP_HTTP_READ_TIMEOUT", 10*time.Second),
+		WriteTimeout: getEnvAsDuration("APP_HTTP_WRITE_TIMEOUT", 10*time.Second),
+		IdleTimeout:  getEnvAsDuration("APP_HTTP_IDLE_TIMEOUT", 10*time.Second),
 	}
 
 	redis := RedisConfig{
@@ -65,9 +65,9 @@ func Load() Config {
 	}
 
 	cfg := Config{
-		Server: sever,
-		Redis:  redis,
-		Log:    log,
+		HTTPServer: httpServer,
+		Redis:      redis,
+		Log:        log,
 	}
 
 	return cfg
@@ -122,6 +122,6 @@ func (c *Config) RedisAddr() string {
 }
 
 // ServerAddr returns the server address in host:port format
-func (c *Config) ServerAddr() string {
-	return fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
+func (c *Config) HTTPServerAddr() string {
+	return fmt.Sprintf("%s:%d", c.HTTPServer.Host, c.HTTPServer.Port)
 }
