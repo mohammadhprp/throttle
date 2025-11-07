@@ -13,6 +13,7 @@ import (
 // Config holds application configuration sourced from environment variables.
 type Config struct {
 	HTTPServer HTTPServerConfig
+	GRPCServer GRPCServerConfig
 	Redis      RedisConfig
 	Log        LogConfig
 }
@@ -23,13 +24,19 @@ type LogConfig struct {
 	Format string // json, console
 }
 
-// ServerConfig contains HTTP server settings
+// HTTPServerConfig contains HTTP server settings
 type HTTPServerConfig struct {
 	Host         string
 	Port         int
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
 	IdleTimeout  time.Duration
+}
+
+// GRPCServerConfig contains gRPC server settings
+type GRPCServerConfig struct {
+	Host string
+	Port int
 }
 
 // RedisConfig contains Redis connection settings
@@ -52,6 +59,11 @@ func Load() Config {
 		IdleTimeout:  getEnvAsDuration("APP_HTTP_IDLE_TIMEOUT", 10*time.Second),
 	}
 
+	grpcServer := GRPCServerConfig{
+		Host: getEnv("APP_GRPC_HOST", "0.0.0.0"),
+		Port: getEnvAsInt("APP_GRPC_PORT", 50051),
+	}
+
 	redis := RedisConfig{
 		Host:     getEnv("REDIS_HOST", "localhost"),
 		Port:     getEnvAsInt("REDIS_PORT", 6379),
@@ -66,6 +78,7 @@ func Load() Config {
 
 	cfg := Config{
 		HTTPServer: httpServer,
+		GRPCServer: grpcServer,
 		Redis:      redis,
 		Log:        log,
 	}
@@ -121,7 +134,12 @@ func (c *Config) RedisAddr() string {
 	return fmt.Sprintf("%s:%d", c.Redis.Host, c.Redis.Port)
 }
 
-// ServerAddr returns the server address in host:port format
+// HTTPServerAddr returns the HTTP server address in host:port format
 func (c *Config) HTTPServerAddr() string {
 	return fmt.Sprintf("%s:%d", c.HTTPServer.Host, c.HTTPServer.Port)
+}
+
+// GRPCServerAddr returns the gRPC server address in host:port format
+func (c *Config) GRPCServerAddr() string {
+	return fmt.Sprintf("%s:%d", c.GRPCServer.Host, c.GRPCServer.Port)
 }
