@@ -1,15 +1,19 @@
 # Throttle
 
-A high-performance, distributed rate limiter implementation in Go using Redis as a backend store. This rate limiter supports multiple algorithms and can be easily integrated into your microservices architecture.
+Throttle is a Redis-backed, distributed rate limiter written in Go. It bundles multiple limiting strategies and exposes them through transports such as HTTP and gRPC, making it easy to drop into an existing microservice stack.
 
 ## Quick Start
 
-1. Copy `.env.example` to `.env` and tweak values if needed.
-
-2. Build and start containers:
+1. Copy the default environment and adjust anything you need:
 
    ```bash
-    make build
-    ```
+   cp .env.example .env
+   ```
+
+2. Build and start the stack (app + Redis) in the background:
+
+   ```bash
+   make build
+   ```
 
 3. Access at `http://localhost:3000`.
