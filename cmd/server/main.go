@@ -47,11 +47,10 @@ func main() {
 	// Initialize router
 	router := mux.NewRouter()
 
-	// Register routes
-	router.PathPrefix("/api").Subrouter()
+	healthCheckHanlder := handler.NewHealthCheckHanlder(store, logger)
 
-	// Health check endpoint (no rate limiting)
-	router.HandleFunc("/health", handler.HealthCheck(store)).Methods("GET")
+	// Health check endpoint
+	router.HandleFunc("/health", healthCheckHanlder.HealthCheck()).Methods("GET")
 
 	// Configure server
 	srv := &http.Server{
