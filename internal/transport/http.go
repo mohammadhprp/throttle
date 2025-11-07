@@ -25,6 +25,7 @@ func NewHTTPServer(cfg ServerConfig) *HTTPServer {
 
 	handlers := &ServiceHandlers{
 		HealthCheck: handler.NewHealthCheckHanlder(cfg.Store, cfg.Logger),
+		RateLimit:   handler.NewRateLimitHandler(cfg.Store, cfg.Logger),
 	}
 
 	hs := &HTTPServer{
@@ -48,6 +49,12 @@ func NewHTTPServer(cfg ServerConfig) *HTTPServer {
 // registerRoutes registers all HTTP routes
 func (hs *HTTPServer) registerRoutes() {
 	hs.router.HandleFunc("/health", hs.handlers.HealthCheck.HealthCheck()).Methods("GET")
+
+	// Rate limit routes
+	hs.router.HandleFunc("/ratelimit/set", hs.handlers.RateLimit.Set()).Methods("POST")
+	hs.router.HandleFunc("/ratelimit/check", hs.handlers.RateLimit.Check()).Methods("POST")
+	hs.router.HandleFunc("/ratelimit/status/{key}", hs.handlers.RateLimit.Status()).Methods("GET")
+	hs.router.HandleFunc("/ratelimit/reset/{key}", hs.handlers.RateLimit.Reset()).Methods("DELETE")
 }
 
 // Start starts the HTTP server
