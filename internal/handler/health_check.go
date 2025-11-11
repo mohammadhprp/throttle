@@ -5,15 +5,26 @@ import (
 	"net/http"
 
 	"github.com/mohammadhprp/throttle/internal/service"
+	"go.uber.org/zap"
 )
 
 type HealthCheckHandler struct {
 	service *service.HealthService
+	logger  *zap.Logger
 }
 
 func NewHealthCheckHandler(healthService *service.HealthService) *HealthCheckHandler {
 	return &HealthCheckHandler{
 		service: healthService,
+		logger:  zap.NewNop(),
+	}
+}
+
+// NewHealthCheckHandlerWithLogger creates a new health check handler with a logger
+func NewHealthCheckHandlerWithLogger(healthService *service.HealthService, logger *zap.Logger) *HealthCheckHandler {
+	return &HealthCheckHandler{
+		service: healthService,
+		logger:  logger,
 	}
 }
 
@@ -31,6 +42,7 @@ func (h *HealthCheckHandler) HealthCheck() http.HandlerFunc {
 		if err != nil {
 			response["error"] = err.Error()
 			statusCode = http.StatusServiceUnavailable
+			h.logger.Warn("health check failed", zap.Error(err))
 		}
 
 		w.Header().Set("Content-Type", "application/json")
