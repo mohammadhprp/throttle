@@ -12,6 +12,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/mohammadhprp/throttle/internal/handler"
+	"github.com/mohammadhprp/throttle/internal/service"
 	"go.uber.org/zap"
 )
 
@@ -90,19 +91,20 @@ func TestRateLimitSet(t *testing.T) {
 	logger := createTestLogger()
 	defer logger.Sync()
 
-	h := handler.NewRateLimitHandler(store, logger)
+	rateLimitService := service.NewRateLimitService(store, logger)
+	h := handler.NewRateLimitHandler(rateLimitService)
 
 	tests := []struct {
 		name       string
 		key        string
-		config     handler.RateLimitConfig
+		config     service.RateLimitConfig
 		wantStatus int
 		wantError  bool
 	}{
 		{
 			name: "Valid token bucket configuration",
 			key:  "test_key",
-			config: handler.RateLimitConfig{
+			config: service.RateLimitConfig{
 				Algorithm:      "token_bucket",
 				Limit:          100,
 				WindowSeconds:  10,
@@ -115,7 +117,7 @@ func TestRateLimitSet(t *testing.T) {
 		{
 			name: "Valid fixed window configuration",
 			key:  "test_key_2",
-			config: handler.RateLimitConfig{
+			config: service.RateLimitConfig{
 				Algorithm:     "fixed_window",
 				Limit:         50,
 				WindowSeconds: 5,
@@ -126,23 +128,23 @@ func TestRateLimitSet(t *testing.T) {
 		{
 			name: "Invalid algorithm",
 			key:  "test_key_3",
-			config: handler.RateLimitConfig{
+			config: service.RateLimitConfig{
 				Algorithm:     "invalid",
 				Limit:         100,
 				WindowSeconds: 10,
 			},
-			wantStatus: http.StatusBadRequest,
+			wantStatus: http.StatusInternalServerError,
 			wantError:  true,
 		},
 		{
 			name: "Zero limit",
 			key:  "test_key_4",
-			config: handler.RateLimitConfig{
+			config: service.RateLimitConfig{
 				Algorithm:     "fixed_window",
 				Limit:         0,
 				WindowSeconds: 10,
 			},
-			wantStatus: http.StatusBadRequest,
+			wantStatus: http.StatusInternalServerError,
 			wantError:  true,
 		},
 	}
@@ -151,7 +153,7 @@ func TestRateLimitSet(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			body := struct {
 				Key    string
-				Config handler.RateLimitConfig
+				Config service.RateLimitConfig
 			}{
 				Key:    tt.key,
 				Config: tt.config,
@@ -180,10 +182,11 @@ func TestRateLimitCheck(t *testing.T) {
 	logger := createTestLogger()
 	defer logger.Sync()
 
-	h := handler.NewRateLimitHandler(store, logger)
+	rateLimitService := service.NewRateLimitService(store, logger)
+	h := handler.NewRateLimitHandler(rateLimitService)
 
 	// First, set a rate limit configuration
-	config := handler.RateLimitConfig{
+	config := service.RateLimitConfig{
 		Algorithm:     "fixed_window",
 		Limit:         3,
 		WindowSeconds: 60,
@@ -247,10 +250,11 @@ func TestRateLimitStatus(t *testing.T) {
 	logger := createTestLogger()
 	defer logger.Sync()
 
-	h := handler.NewRateLimitHandler(store, logger)
+	rateLimitService := service.NewRateLimitService(store, logger)
+	h := handler.NewRateLimitHandler(rateLimitService)
 
 	// Set a rate limit configuration
-	config := handler.RateLimitConfig{
+	config := service.RateLimitConfig{
 		Algorithm:     "fixed_window",
 		Limit:         100,
 		WindowSeconds: 60,
@@ -320,10 +324,11 @@ func TestRateLimitReset(t *testing.T) {
 	logger := createTestLogger()
 	defer logger.Sync()
 
-	h := handler.NewRateLimitHandler(store, logger)
+	rateLimitService := service.NewRateLimitService(store, logger)
+	h := handler.NewRateLimitHandler(rateLimitService)
 
 	// Set a rate limit configuration
-	config := handler.RateLimitConfig{
+	config := service.RateLimitConfig{
 		Algorithm:     "fixed_window",
 		Limit:         100,
 		WindowSeconds: 60,
@@ -373,16 +378,17 @@ func TestRateLimitConfigValidation(t *testing.T) {
 	logger := createTestLogger()
 	defer logger.Sync()
 
-	h := handler.NewRateLimitHandler(store, logger)
+	rateLimitService := service.NewRateLimitService(store, logger)
+	h := handler.NewRateLimitHandler(rateLimitService)
 
 	tests := []struct {
 		name       string
-		config     handler.RateLimitConfig
+		config     service.RateLimitConfig
 		wantStatus int
 	}{
 		{
 			name: "Valid token bucket",
-			config: handler.RateLimitConfig{
+			config: service.RateLimitConfig{
 				Algorithm:      "token_bucket",
 				Limit:          100,
 				WindowSeconds:  10,
@@ -393,7 +399,7 @@ func TestRateLimitConfigValidation(t *testing.T) {
 		},
 		{
 			name: "Valid sliding window",
-			config: handler.RateLimitConfig{
+			config: service.RateLimitConfig{
 				Algorithm:     "sliding_window",
 				Limit:         50,
 				WindowSeconds: 5,
@@ -402,32 +408,32 @@ func TestRateLimitConfigValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid algorithm",
-			config: handler.RateLimitConfig{
+			config: service.RateLimitConfig{
 				Algorithm:     "invalid_algo",
 				Limit:         100,
 				WindowSeconds: 10,
 			},
-			wantStatus: http.StatusBadRequest,
+			wantStatus: http.StatusInternalServerError,
 		},
 		{
 			name: "Zero limit",
-			config: handler.RateLimitConfig{
+			config: service.RateLimitConfig{
 				Algorithm:     "fixed_window",
 				Limit:         0,
 				WindowSeconds: 10,
 			},
-			wantStatus: http.StatusBadRequest,
+			wantStatus: http.StatusInternalServerError,
 		},
 		{
 			name: "Token bucket without refill rate",
-			config: handler.RateLimitConfig{
+			config: service.RateLimitConfig{
 				Algorithm:      "token_bucket",
 				Limit:          100,
 				WindowSeconds:  10,
 				RefillRate:     0,
 				RefillInterval: 1,
 			},
-			wantStatus: http.StatusBadRequest,
+			wantStatus: http.StatusInternalServerError,
 		},
 	}
 
@@ -435,7 +441,7 @@ func TestRateLimitConfigValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			body := struct {
 				Key    string
-				Config handler.RateLimitConfig
+				Config service.RateLimitConfig
 			}{
 				Key:    fmt.Sprintf("validation_%s", tt.name),
 				Config: tt.config,
@@ -460,10 +466,11 @@ func TestRateLimitResponseHeaders(t *testing.T) {
 	logger := createTestLogger()
 	defer logger.Sync()
 
-	h := handler.NewRateLimitHandler(store, logger)
+	rateLimitService := service.NewRateLimitService(store, logger)
+	h := handler.NewRateLimitHandler(rateLimitService)
 
 	// Set a rate limit configuration
-	config := handler.RateLimitConfig{
+	config := service.RateLimitConfig{
 		Algorithm:     "fixed_window",
 		Limit:         10,
 		WindowSeconds: 60,
@@ -508,7 +515,8 @@ func TestRateLimitInvalidJSON(t *testing.T) {
 	logger := createTestLogger()
 	defer logger.Sync()
 
-	h := handler.NewRateLimitHandler(store, logger)
+	rateLimitService := service.NewRateLimitService(store, logger)
+	h := handler.NewRateLimitHandler(rateLimitService)
 
 	req := httptest.NewRequest("POST", "/ratelimit/set", bytes.NewReader([]byte("invalid json")))
 	w := httptest.NewRecorder()

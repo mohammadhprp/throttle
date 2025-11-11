@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mohammadhprp/throttle/internal/handler"
+	"github.com/mohammadhprp/throttle/internal/service"
 	"github.com/mohammadhprp/throttle/internal/storage"
 	"go.uber.org/zap"
 )
@@ -35,7 +36,8 @@ func TestHealthCheckHandler_Healthy(t *testing.T) {
 	logger := newTestLogger(t)
 	defer logger.Sync()
 
-	h := handler.NewHealthCheckHanlder(store, logger)
+	healthService := service.NewHealthService(store, logger)
+	h := handler.NewHealthCheckHandler(healthService)
 	healthCheckFunc := h.HealthCheck()
 
 	// Create a test request
@@ -81,7 +83,8 @@ func TestHealthCheckHandler_UnhealthyStoreDown(t *testing.T) {
 	logger := newTestLogger(t)
 	defer logger.Sync()
 
-	h := handler.NewHealthCheckHanlder(mockStore, logger)
+	healthService := service.NewHealthService(mockStore, logger)
+	h := handler.NewHealthCheckHandler(healthService)
 	healthCheckFunc := h.HealthCheck()
 
 	// Create a test request
@@ -124,7 +127,8 @@ func TestHealthCheckHandler_ContentTypeJSON(t *testing.T) {
 	logger := newTestLogger(t)
 	defer logger.Sync()
 
-	h := handler.NewHealthCheckHanlder(store, logger)
+	healthService := service.NewHealthService(store, logger)
+	h := handler.NewHealthCheckHandler(healthService)
 	healthCheckFunc := h.HealthCheck()
 
 	// Create a test request
@@ -147,7 +151,8 @@ func TestHealthCheckHandler_ValidJSON(t *testing.T) {
 	logger := newTestLogger(t)
 	defer logger.Sync()
 
-	h := handler.NewHealthCheckHanlder(store, logger)
+	healthService := service.NewHealthService(store, logger)
+	h := handler.NewHealthCheckHandler(healthService)
 	healthCheckFunc := h.HealthCheck()
 
 	// Create a test request
@@ -170,7 +175,8 @@ func TestHealthCheckHandler_RequiredFields(t *testing.T) {
 	logger := newTestLogger(t)
 	defer logger.Sync()
 
-	h := handler.NewHealthCheckHanlder(store, logger)
+	healthService := service.NewHealthService(store, logger)
+	h := handler.NewHealthCheckHandler(healthService)
 	healthCheckFunc := h.HealthCheck()
 
 	// Create a test request
@@ -202,7 +208,8 @@ func TestHealthCheckHandler_TimeFormat(t *testing.T) {
 	logger := newTestLogger(t)
 	defer logger.Sync()
 
-	h := handler.NewHealthCheckHanlder(store, logger)
+	healthService := service.NewHealthService(store, logger)
+	h := handler.NewHealthCheckHandler(healthService)
 	healthCheckFunc := h.HealthCheck()
 
 	// Create a test request
@@ -230,7 +237,8 @@ func TestHealthCheckHandler_GET(t *testing.T) {
 	logger := newTestLogger(t)
 	defer logger.Sync()
 
-	h := handler.NewHealthCheckHanlder(store, logger)
+	healthService := service.NewHealthService(store, logger)
+	h := handler.NewHealthCheckHandler(healthService)
 	healthCheckFunc := h.HealthCheck()
 
 	// Create a GET request
@@ -252,7 +260,8 @@ func TestHealthCheckHandler_POST(t *testing.T) {
 	logger := newTestLogger(t)
 	defer logger.Sync()
 
-	h := handler.NewHealthCheckHanlder(store, logger)
+	healthService := service.NewHealthService(store, logger)
+	h := handler.NewHealthCheckHandler(healthService)
 	healthCheckFunc := h.HealthCheck()
 
 	// Create a POST request
@@ -274,7 +283,8 @@ func TestHealthCheckHandler_MultipleRequests(t *testing.T) {
 	logger := newTestLogger(t)
 	defer logger.Sync()
 
-	h := handler.NewHealthCheckHanlder(store, logger)
+	healthService := service.NewHealthService(store, logger)
+	h := handler.NewHealthCheckHandler(healthService)
 	healthCheckFunc := h.HealthCheck()
 
 	// Make multiple requests
@@ -308,7 +318,8 @@ func TestHealthCheckHandler_ContextTimeout(t *testing.T) {
 	logger := newTestLogger(t)
 	defer logger.Sync()
 
-	h := handler.NewHealthCheckHanlder(mockStore, logger)
+	healthService := service.NewHealthService(mockStore, logger)
+	h := handler.NewHealthCheckHandler(healthService)
 	healthCheckFunc := h.HealthCheck()
 
 	// Create a request with a short timeout (store will return deadline exceeded)
@@ -363,7 +374,8 @@ func TestHealthCheckHandler_StoreError(t *testing.T) {
 			logger := newTestLogger(t)
 			defer logger.Sync()
 
-			h := handler.NewHealthCheckHanlder(mockStore, logger)
+			healthService := service.NewHealthService(mockStore, logger)
+	h := handler.NewHealthCheckHandler(healthService)
 			healthCheckFunc := h.HealthCheck()
 
 			req := httptest.NewRequest("GET", "http://example.com/health", nil)
@@ -399,7 +411,8 @@ func TestHealthCheckHandler_ResponseStructure(t *testing.T) {
 	logger := newTestLogger(t)
 	defer logger.Sync()
 
-	h := handler.NewHealthCheckHanlder(store, logger)
+	healthService := service.NewHealthService(store, logger)
+	h := handler.NewHealthCheckHandler(healthService)
 	healthCheckFunc := h.HealthCheck()
 
 	req := httptest.NewRequest("GET", "http://example.com/health", nil)
@@ -434,7 +447,8 @@ func TestHealthCheckHandler_ConcurrentRequests(t *testing.T) {
 	logger := newTestLogger(t)
 	defer logger.Sync()
 
-	h := handler.NewHealthCheckHanlder(store, logger)
+	healthService := service.NewHealthService(store, logger)
+	h := handler.NewHealthCheckHandler(healthService)
 	healthCheckFunc := h.HealthCheck()
 
 	done := make(chan struct{})
