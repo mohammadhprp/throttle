@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package throttle.v1;
+
+option go_package = "github.com/mohammadhprp/throttle/proto/ratelimit";
+
+// RateLimit service for managing rate limiting configurations and checks
+service RateLimit {
+  // Set configures a new rate limit or updates an existing one
+  rpc Set(SetRequest) returns (SetResponse);
+
+  // Check verifies if a request is allowed under the configured rate limit
+  rpc Check(CheckRequest) returns (CheckResponse);
+
+  // Status retrieves the current status of a rate limit configuration
+  rpc Status(StatusRequest) returns (StatusResponse);
+
+  // Reset resets a rate limit configuration and clears its state
+  rpc Reset(ResetRequest) returns (ResetResponse);
+}
+
+// RateLimitConfig defines the configuration for a rate limiter
+message RateLimitConfig {
+  string algorithm = 1;      // token_bucket, sliding_window, fixed_window, leaky_bucket
+  int64 limit = 2;           // max requests/tokens
+  int32 window_seconds = 3;  // time window in seconds
+  int32 refill_rate = 4;     // tokens per interval (for token bucket)
+  int32 refill_interval = 5; // interval in seconds (for token bucket)
+}
+
+// SetRequest is the request message for configuring a rate limit
+message SetRequest {
+  string key = 1;
+  RateLimitConfig config = 2;
+}
+
+// SetResponse is the response message after configuring a rate limit
+message SetResponse {
+  string message = 1;
+  string key = 2;
+}
+
+// CheckRequest is the request message for checking if a request is allowed
+message CheckRequest {
+  string key = 1;
+  string algorithm = 2;
+}
+
+// CheckResponse is the response message for a rate limit check
+message CheckResponse {
+  bool allowed = 1;
+  int64 remaining = 2;    // remaining requests/tokens
+  int64 reset_at = 3;     // Unix timestamp
+  int32 retry_after = 4;  // seconds until retry is allowed
+}
+
+// StatusRequest is the request message for getting rate limit status
+message StatusRequest {
+  string key = 1;
+}
+
+// StatusResponse is the response message containing rate limit status
+message StatusResponse {
+  string key = 1;
+  string algorithm = 2;
+  RateLimitConfig config = 3;
+  int64 created_at = 4;  // Unix timestamp
+  int64 updated_at = 5;  // Unix timestamp
+  int64 next_reset = 6;  // Unix timestamp
+}
+
+// ResetRequest is the request message for resetting a rate limit
+message ResetRequest {
+  string key = 1;
+}
+
+// ResetResponse is the response message after resetting a rate limit
+message ResetResponse {
+  string message = 1;
+  string key = 2;
+}
