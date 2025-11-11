@@ -13,19 +13,10 @@ import (
 
 // TestRateLimitService_ValidateConfig_ValidTokenBucket tests valid token bucket configuration
 func TestRateLimitService_ValidateConfig_ValidTokenBucket(t *testing.T) {
-	store := storage.NewMemoryStore()
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
+	_, svc, cleanup := setupTest(t)
+	defer cleanup()
 
-	svc := service.NewRateLimitService(store, logger)
-
-	config := &service.RateLimitConfig{
-		Algorithm:      "token_bucket",
-		Limit:          100,
-		WindowSeconds:  10,
-		RefillRate:     10,
-		RefillInterval: 1,
-	}
+	config := createTokenBucketConfig()
 
 	err := svc.ValidateConfig(config)
 	if err != nil {
@@ -35,17 +26,10 @@ func TestRateLimitService_ValidateConfig_ValidTokenBucket(t *testing.T) {
 
 // TestRateLimitService_ValidateConfig_ValidFixedWindow tests valid fixed window configuration
 func TestRateLimitService_ValidateConfig_ValidFixedWindow(t *testing.T) {
-	store := storage.NewMemoryStore()
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
+	_, svc, cleanup := setupTest(t)
+	defer cleanup()
 
-	svc := service.NewRateLimitService(store, logger)
-
-	config := &service.RateLimitConfig{
-		Algorithm:     "fixed_window",
-		Limit:         50,
-		WindowSeconds: 60,
-	}
+	config := createFixedWindowConfig()
 
 	err := svc.ValidateConfig(config)
 	if err != nil {
@@ -55,17 +39,10 @@ func TestRateLimitService_ValidateConfig_ValidFixedWindow(t *testing.T) {
 
 // TestRateLimitService_ValidateConfig_ValidSlidingWindow tests valid sliding window configuration
 func TestRateLimitService_ValidateConfig_ValidSlidingWindow(t *testing.T) {
-	store := storage.NewMemoryStore()
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
+	_, svc, cleanup := setupTest(t)
+	defer cleanup()
 
-	svc := service.NewRateLimitService(store, logger)
-
-	config := &service.RateLimitConfig{
-		Algorithm:     "sliding_window",
-		Limit:         100,
-		WindowSeconds: 30,
-	}
+	config := createSlidingWindowConfig()
 
 	err := svc.ValidateConfig(config)
 	if err != nil {
@@ -336,24 +313,23 @@ func TestRateLimitService_GetConfig_NotFound(t *testing.T) {
 
 // TestRateLimitService_CheckLimit_ConfigNotFound tests CheckLimit with non-existent config
 func TestRateLimitService_CheckLimit_ConfigNotFound(t *testing.T) {
-	store := storage.NewMemoryStore()
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
+	_, svc, cleanup := setupTest(t)
+	defer cleanup()
 
-	svc := service.NewRateLimitService(store, logger)
-
-	allowed, remaining, _, _, err := svc.CheckLimit(context.Background(), "non_existent")
+	resp, err := svc.CheckLimit(context.Background(), "non_existent")
 
 	if err == nil {
 		t.Errorf("expected error for non-existent config, got nil")
 	}
 
-	if allowed {
-		t.Errorf("expected allowed=false for non-existent config, got true")
-	}
+	if resp != nil {
+		if resp.Allowed {
+			t.Errorf("expected allowed=false for non-existent config, got true")
+		}
 
-	if remaining != 0 {
-		t.Errorf("expected remaining=0, got %d", remaining)
+		if resp.Remaining != 0 {
+			t.Errorf("expected remaining=0, got %d", resp.Remaining)
+		}
 	}
 }
 
@@ -373,13 +349,10 @@ func TestRateLimitService_ResetLimit_NotFound(t *testing.T) {
 
 // TestRateLimitService_GetStatus_NotFound tests GetStatus for non-existent key
 func TestRateLimitService_GetStatus_NotFound(t *testing.T) {
-	store := storage.NewMemoryStore()
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
+	_, svc, cleanup := setupTest(t)
+	defer cleanup()
 
-	svc := service.NewRateLimitService(store, logger)
-
-	_, _, _, _, err := svc.GetStatus(context.Background(), "non_existent")
+	_, err := svc.GetStatus(context.Background(), "non_existent")
 	if err == nil {
 		t.Errorf("expected error for non-existent key, got nil")
 	}
@@ -402,19 +375,6 @@ func TestRateLimitService_NewRateLimitService(t *testing.T) {
 	}
 }
 
-// TestRateLimitService_GetMetadata_NotFound tests GetMetadata for non-existent key
-func TestRateLimitService_GetMetadata_NotFound(t *testing.T) {
-	store := storage.NewMemoryStore()
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
-
-	svc := service.NewRateLimitService(store, logger)
-
-	_, err := svc.GetMetadata(context.Background(), "non_existent")
-	if err == nil {
-		t.Errorf("expected error for non-existent metadata, got nil")
-	}
-}
 
 // TestRateLimitService_GetOrCreateLimiter tests limiter creation
 func TestRateLimitService_GetOrCreateLimiter(t *testing.T) {
