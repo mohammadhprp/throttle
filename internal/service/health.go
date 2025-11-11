@@ -27,10 +27,10 @@ func (s *HealthService) GetHealthStatus(ctx context.Context) (status string, tim
 	timestamp = time.Now().Format(time.RFC3339)
 
 	if err := s.store.Ping(ctx); err != nil {
-		return "unhealthy", timestamp, err
+		return HealthStatusUnhealthy, timestamp, err
 	}
 
-	return "healthy", timestamp, nil
+	return HealthStatusHealthy, timestamp, nil
 }
 
 // Ping verifies connectivity with the underlying store

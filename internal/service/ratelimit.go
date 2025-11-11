@@ -21,6 +21,28 @@ type RateLimitConfig struct {
 	RefillInterval int    `json:"refill_interval"` // interval in seconds (for token bucket)
 }
 
+// CheckLimitResponse contains the response for a check limit request
+type CheckLimitResponse struct {
+	Allowed    bool  `json:"allowed"`
+	Remaining  int64 `json:"remaining"`
+	ResetAt    int64 `json:"reset_at"`
+	RetryAfter int   `json:"retry_after"`
+}
+
+// GetStatusResponse contains the status information for a rate limit
+type GetStatusResponse struct {
+	Config    *RateLimitConfig `json:"config"`
+	CreatedAt int64            `json:"created_at"`
+	UpdatedAt int64            `json:"updated_at"`
+	NextReset int64            `json:"next_reset"`
+}
+
+// RateLimitMetadata contains metadata about a rate limit configuration
+type RateLimitMetadata struct {
+	CreatedAt int64 `json:"created_at"`
+	UpdatedAt int64 `json:"updated_at"`
+}
+
 // RateLimitService provides business logic for rate limiting
 type RateLimitService struct {
 	store    storage.Store
@@ -40,34 +62,34 @@ func NewRateLimitService(store storage.Store, logger *zap.Logger) *RateLimitServ
 // ValidateConfig validates the rate limit configuration
 func (s *RateLimitService) ValidateConfig(cfg *RateLimitConfig) error {
 	if cfg.Algorithm == "" {
-		return errors.New("algorithm is required")
+		return errors.New(ErrAlgorithmRequired)
 	}
 
 	validAlgorithms := map[string]bool{
-		"token_bucket":   true,
-		"sliding_window": true,
-		"fixed_window":   true,
-		"leaky_bucket":   true,
+		AlgorithmTokenBucket:   true,
+		AlgorithmSlidingWindow: true,
+		AlgorithmFixedWindow:   true,
+		AlgorithmLeakyBucket:   true,
 	}
 
 	if !validAlgorithms[cfg.Algorithm] {
-		return fmt.Errorf("invalid algorithm: %s", cfg.Algorithm)
+		return fmt.Errorf(ErrInvalidAlgorithm, cfg.Algorithm)
 	}
 
 	if cfg.Limit <= 0 {
-		return errors.New("limit must be greater than 0")
+		return errors.New(ErrLimitMustBePositive)
 	}
 
 	if cfg.WindowSeconds <= 0 {
-		return errors.New("window_seconds must be greater than 0")
+		return errors.New(ErrWindowSecondsMissing)
 	}
 
-	if cfg.Algorithm == "token_bucket" {
+	if cfg.Algorithm == AlgorithmTokenBucket {
 		if cfg.RefillRate <= 0 {
-			return errors.New("refill_rate must be greater than 0 for token bucket")
+			return errors.New(ErrRefillRateMissing)
 		}
 		if cfg.RefillInterval <= 0 {
-			return errors.New("refill_interval must be greater than 0 for token bucket")
+			return errors.New(ErrRefillIntervalMissing)
 		}
 	}
 
@@ -83,7 +105,7 @@ func (s *RateLimitService) GetConfig(ctx context.Context, key string) (*RateLimi
 	}
 
 	if configStr == "" {
-		return nil, errors.New("configuration not found")
+		return nil, ErrNotFound
 	}
 
 	var config RateLimitConfig
@@ -94,25 +116,6 @@ func (s *RateLimitService) GetConfig(ctx context.Context, key string) (*RateLimi
 	return &config, nil
 }
 
-// GetMetadata retrieves the metadata for a key
-func (s *RateLimitService) GetMetadata(ctx context.Context, key string) (map[string]interface{}, error) {
-	metadataKey := s.MetadataKey(key)
-	metadataStr, err := s.store.Get(ctx, metadataKey)
-	if err != nil {
-		return nil, err
-	}
-
-	if metadataStr == "" {
-		return nil, errors.New("metadata not found")
-	}
-
-	var metadata map[string]interface{}
-	if err := json.Unmarshal([]byte(metadataStr), &metadata); err != nil {
-		return nil, fmt.Errorf("failed to parse metadata: %w", err)
-	}
-
-	return metadata, nil
-}
 
 // GetOrCreateLimiter gets an existing limiter or creates a new one
 func (s *RateLimitService) GetOrCreateLimiter(limiterKey string, cfg *RateLimitConfig) (limiter.RateLimiter, error) {
@@ -128,17 +131,17 @@ func (s *RateLimitService) GetOrCreateLimiter(limiterKey string, cfg *RateLimitC
 
 	var lim limiter.RateLimiter
 	switch cfg.Algorithm {
-	case "token_bucket":
+	case AlgorithmTokenBucket:
 		refillInterval := time.Duration(cfg.RefillInterval) * time.Second
 		lim = limiter.NewTokenBucket(s.store, float64(cfg.RefillRate), refillInterval, float64(cfg.Limit), s.Logger)
 
-	case "sliding_window":
+	case AlgorithmSlidingWindow:
 		lim = limiter.NewSlidingWindow(s.store, cfg.Limit, windowDuration, s.Logger)
 
-	case "fixed_window":
+	case AlgorithmFixedWindow:
 		lim = limiter.NewFixedWindow(s.store, cfg.Limit, windowDuration, s.Logger)
 
-	case "leaky_bucket":
+	case AlgorithmLeakyBucket:
 		lim = limiter.NewLeakyBucket(s.store, cfg.Limit, leakRate, windowDuration, s.Logger)
 
 	default:
@@ -149,9 +152,18 @@ func (s *RateLimitService) GetOrCreateLimiter(limiterKey string, cfg *RateLimitC
 	return lim, nil
 }
 
+// nextWindowStart calculates the Unix timestamp of the start of the next window
+func (s *RateLimitService) nextWindowStart(cfg *RateLimitConfig) int64 {
+	now := time.Now()
+	windowsSinceEpoch := now.Unix() / int64(cfg.WindowSeconds)
+	return (windowsSinceEpoch + 1) * int64(cfg.WindowSeconds)
+}
+
 // CalculateRemaining calculates the remaining requests/tokens
+// NOTE: This returns a simplified estimate (limit if allowed, 0 if denied).
+// For accurate remaining capacity, the RateLimiter interface should expose a Remaining() method.
 func (s *RateLimitService) CalculateRemaining(ctx context.Context, key string, cfg *RateLimitConfig, allowed bool) int64 {
-	// Simplified calculation based on algorithm
+	// Simplified calculation based on whether request was allowed
 	// This is a best-effort estimate since actual remaining depends on algorithm internals
 	remaining := cfg.Limit
 	if !allowed {
@@ -163,19 +175,16 @@ func (s *RateLimitService) CalculateRemaining(ctx context.Context, key string, c
 // CalculateResetAt calculates the reset timestamp
 func (s *RateLimitService) CalculateResetAt(cfg *RateLimitConfig) int64 {
 	// Window-based algorithms reset at the start of the next window
-	now := time.Now()
-	windowsSinceEpoch := now.Unix() / int64(cfg.WindowSeconds)
-	nextWindowStart := (windowsSinceEpoch + 1) * int64(cfg.WindowSeconds)
-	return nextWindowStart
+	return s.nextWindowStart(cfg)
 }
 
 // CalculateRetryAfter calculates seconds to wait before retry
 func (s *RateLimitService) CalculateRetryAfter(cfg *RateLimitConfig) int {
 	// Calculate seconds until next window
 	now := time.Now()
-	windowsSinceEpoch := now.Unix() / int64(cfg.WindowSeconds)
-	nextWindowStart := time.Unix((windowsSinceEpoch+1)*int64(cfg.WindowSeconds), 0)
-	retryAfter := int(nextWindowStart.Sub(now).Seconds())
+	nextWindowTS := s.nextWindowStart(cfg)
+	nextWindowTime := time.Unix(nextWindowTS, 0)
+	retryAfter := int(nextWindowTime.Sub(now).Seconds())
 	if retryAfter < 1 {
 		retryAfter = 1
 	}
@@ -184,17 +193,17 @@ func (s *RateLimitService) CalculateRetryAfter(cfg *RateLimitConfig) int {
 
 // ConfigKey generates a key for storing configuration
 func (s *RateLimitService) ConfigKey(key string) string {
-	return fmt.Sprintf("ratelimit:config:%s", key)
+	return ConfigKeyPrefix + key
 }
 
 // MetadataKey generates a key for storing metadata
 func (s *RateLimitService) MetadataKey(key string) string {
-	return fmt.Sprintf("ratelimit:metadata:%s", key)
+	return MetadataKeyPrefix + key
 }
 
 // LimiterKey generates a key for storing limiter instance
 func (s *RateLimitService) LimiterKey(key, algorithm string) string {
-	return fmt.Sprintf("%s:%s", key, algorithm)
+	return fmt.Sprintf(LimiterKeyFormat, key, algorithm)
 }
 
 // SetConfig stores the rate limit configuration
@@ -210,10 +219,9 @@ func (s *RateLimitService) SetConfig(ctx context.Context, key string, config *Ra
 	}
 
 	now := time.Now()
-	metadata := map[string]interface{}{
-		"config":     config,
-		"created_at": now.Unix(),
-		"updated_at": now.Unix(),
+	metadata := RateLimitMetadata{
+		CreatedAt: now.Unix(),
+		UpdatedAt: now.Unix(),
 	}
 
 	metadataJSON, err := json.Marshal(metadata)
@@ -235,33 +243,38 @@ func (s *RateLimitService) SetConfig(ctx context.Context, key string, config *Ra
 }
 
 // CheckLimit checks if a request is allowed
-func (s *RateLimitService) CheckLimit(ctx context.Context, key string) (allowed bool, remaining int64, resetAt int64, retryAfter int, err error) {
+func (s *RateLimitService) CheckLimit(ctx context.Context, key string) (*CheckLimitResponse, error) {
 	// Get configuration
 	config, err := s.GetConfig(ctx, key)
 	if err != nil {
-		return false, 0, 0, 0, err
+		return nil, err
 	}
 
 	// Get or create limiter
 	limiterKey := s.LimiterKey(key, config.Algorithm)
 	rateLimiter, err := s.GetOrCreateLimiter(limiterKey, config)
 	if err != nil {
-		return false, 0, 0, 0, err
+		return nil, err
 	}
 
 	// Check if request is allowed
-	allowed, err = rateLimiter.Allow(ctx, key)
+	allowed, err := rateLimiter.Allow(ctx, key)
 	if err != nil {
 		// Fail open on error
 		allowed = true
 	}
 
 	// Calculate metrics for response
-	remaining = s.CalculateRemaining(ctx, key, config, allowed)
-	resetAt = s.CalculateResetAt(config)
-	retryAfter = s.CalculateRetryAfter(config)
+	remaining := s.CalculateRemaining(ctx, key, config, allowed)
+	resetAt := s.CalculateResetAt(config)
+	retryAfter := s.CalculateRetryAfter(config)
 
-	return allowed, remaining, resetAt, retryAfter, nil
+	return &CheckLimitResponse{
+		Allowed:    allowed,
+		Remaining:  remaining,
+		ResetAt:    resetAt,
+		RetryAfter: retryAfter,
+	}, nil
 }
 
 // ResetLimit resets a rate limit configuration and clears its state
@@ -287,39 +300,62 @@ func (s *RateLimitService) ResetLimit(ctx context.Context, key string) error {
 	configKey := s.ConfigKey(key)
 	metadataKey := s.MetadataKey(key)
 
-	_ = s.store.Delete(ctx, configKey)
-	_ = s.store.Delete(ctx, metadataKey)
+	if err := s.store.Delete(ctx, configKey); err != nil {
+		s.Logger.Warn("failed to delete rate limit config", zap.String("key", key), zap.Error(err))
+	}
+
+	if err := s.store.Delete(ctx, metadataKey); err != nil {
+		s.Logger.Warn("failed to delete rate limit metadata", zap.String("key", key), zap.Error(err))
+	}
 
 	return nil
 }
 
 // GetStatus retrieves the current status of a rate limit
-func (s *RateLimitService) GetStatus(ctx context.Context, key string) (config *RateLimitConfig, createdAt int64, updatedAt int64, nextReset int64, err error) {
+func (s *RateLimitService) GetStatus(ctx context.Context, key string) (*GetStatusResponse, error) {
 	// Get configuration
-	config, err = s.GetConfig(ctx, key)
+	config, err := s.GetConfig(ctx, key)
 	if err != nil {
-		return nil, 0, 0, 0, err
+		return nil, err
 	}
 
 	// Get metadata
-	metadata, err := s.GetMetadata(ctx, key)
+	metadata, err := s.parseMetadata(ctx, key)
 	if err != nil {
-		metadata = map[string]interface{}{
-			"created_at": time.Now().Unix(),
-			"updated_at": time.Now().Unix(),
+		// Use current time as defaults if metadata is not found
+		now := time.Now().Unix()
+		metadata = &RateLimitMetadata{
+			CreatedAt: now,
+			UpdatedAt: now,
 		}
 	}
 
-	createdAt = int64(0)
-	updatedAt = int64(0)
-	if ca, ok := metadata["created_at"].(float64); ok {
-		createdAt = int64(ca)
-	}
-	if ua, ok := metadata["updated_at"].(float64); ok {
-		updatedAt = int64(ua)
+	nextReset := s.CalculateResetAt(config)
+
+	return &GetStatusResponse{
+		Config:    config,
+		CreatedAt: metadata.CreatedAt,
+		UpdatedAt: metadata.UpdatedAt,
+		NextReset: nextReset,
+	}, nil
+}
+
+// parseMetadata parses metadata from storage
+func (s *RateLimitService) parseMetadata(ctx context.Context, key string) (*RateLimitMetadata, error) {
+	metadataKey := s.MetadataKey(key)
+	metadataStr, err := s.store.Get(ctx, metadataKey)
+	if err != nil {
+		return nil, err
 	}
 
-	nextReset = s.CalculateResetAt(config)
+	if metadataStr == "" {
+		return nil, ErrNotFound
+	}
 
-	return config, createdAt, updatedAt, nextReset, nil
+	var metadata RateLimitMetadata
+	if err := json.Unmarshal([]byte(metadataStr), &metadata); err != nil {
+		return nil, fmt.Errorf("failed to parse metadata: %w", err)
+	}
+
+	return &metadata, nil
 }
