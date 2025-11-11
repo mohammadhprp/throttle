@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/mohammadhprp/throttle/internal/handler"
 	"github.com/mohammadhprp/throttle/internal/service"
 	"go.uber.org/zap"
 )
@@ -25,15 +24,8 @@ type HTTPServer struct {
 // NewHTTPServer creates a new HTTP server
 func NewHTTPServer(cfg ServerConfig) *HTTPServer {
 	router := mux.NewRouter()
-
-	// Create services
-	healthService := service.NewHealthService(cfg.Store, cfg.Logger)
-	rateLimitService := service.NewRateLimitService(cfg.Store, cfg.Logger)
-
-	handlers := &ServiceHandlers{
-		HealthCheck: handler.NewHealthCheckHandler(healthService),
-		RateLimit:   handler.NewRateLimitHandler(rateLimitService),
-	}
+	healthService, rateLimitService := createServices(cfg)
+	handlers := createServiceHandlers(cfg, healthService, rateLimitService)
 
 	hs := &HTTPServer{
 		address:          cfg.Address,

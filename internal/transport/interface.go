@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/mohammadhprp/throttle/internal/handler"
+	"github.com/mohammadhprp/throttle/internal/service"
 	"github.com/mohammadhprp/throttle/internal/storage"
 	"go.uber.org/zap"
 )
@@ -34,4 +35,17 @@ type ServerConfig struct {
 type ServiceHandlers struct {
 	HealthCheck *handler.HealthCheckHandler
 	RateLimit   *handler.RateLimitHandler
+}
+
+// createServices creates and initializes all domain services
+func createServices(cfg ServerConfig) (healthService *service.HealthService, rateLimitService *service.RateLimitService) {
+	return service.NewHealthService(cfg.Store, cfg.Logger), service.NewRateLimitService(cfg.Store, cfg.Logger)
+}
+
+// createServiceHandlers creates and initializes all service handlers
+func createServiceHandlers(cfg ServerConfig, healthService *service.HealthService, rateLimitService *service.RateLimitService) *ServiceHandlers {
+	return &ServiceHandlers{
+		HealthCheck: handler.NewHealthCheckHandlerWithLogger(healthService, cfg.Logger),
+		RateLimit:   handler.NewRateLimitHandler(rateLimitService),
+	}
 }

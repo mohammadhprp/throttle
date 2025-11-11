@@ -5,7 +5,6 @@ import (
 	"net"
 	"time"
 
-	"github.com/mohammadhprp/throttle/internal/handler"
 	"github.com/mohammadhprp/throttle/internal/service"
 	pbhealth "github.com/mohammadhprp/throttle/proto/health"
 	pbratelimit "github.com/mohammadhprp/throttle/proto/ratelimit"
@@ -26,15 +25,8 @@ type GRPCServer struct {
 // NewGRPCServer creates a new gRPC server
 func NewGRPCServer(cfg ServerConfig) *GRPCServer {
 	gsrv := grpc.NewServer()
-
-	// Create services
-	healthService := service.NewHealthService(cfg.Store, cfg.Logger)
-	rateLimitService := service.NewRateLimitService(cfg.Store, cfg.Logger)
-
-	handlers := &ServiceHandlers{
-		HealthCheck: handler.NewHealthCheckHandler(healthService),
-		RateLimit:   handler.NewRateLimitHandler(rateLimitService),
-	}
+	healthService, rateLimitService := createServices(cfg)
+	handlers := createServiceHandlers(cfg, healthService, rateLimitService)
 
 	grpcSrv := &GRPCServer{
 		address:          cfg.Address,
@@ -143,19 +135,33 @@ func (hs *HealthServiceImpl) Watch(_ *pbhealth.HealthCheckRequest, stream grpc.S
 }
 
 func (hs *HealthServiceImpl) currentStatus(ctx context.Context) pbhealth.HealthCheckResponse_ServingStatus {
-	if hs == nil || hs.healthService == nil {
-		return pbhealth.HealthCheckResponse_UNKNOWN
-	}
-
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
 	if err := hs.healthService.Ping(ctx); err != nil {
 		return pbhealth.HealthCheckResponse_NOT_SERVING
 	}
 
 	return pbhealth.HealthCheckResponse_SERVING
+}
+
+// protoConfigToService converts proto RateLimitConfig to service RateLimitConfig
+func protoConfigToService(pbConfig *pbratelimit.RateLimitConfig) *service.RateLimitConfig {
+	return &service.RateLimitConfig{
+		Algorithm:      pbConfig.Algorithm,
+		Limit:          pbConfig.Limit,
+		WindowSeconds:  int(pbConfig.WindowSeconds),
+		RefillRate:     int(pbConfig.RefillRate),
+		RefillInterval: int(pbConfig.RefillInterval),
+	}
+}
+
+// serviceConfigToProto converts service RateLimitConfig to proto RateLimitConfig
+func serviceConfigToProto(cfg *service.RateLimitConfig) *pbratelimit.RateLimitConfig {
+	return &pbratelimit.RateLimitConfig{
+		Algorithm:      cfg.Algorithm,
+		Limit:          cfg.Limit,
+		WindowSeconds:  int32(cfg.WindowSeconds),
+		RefillRate:     int32(cfg.RefillRate),
+		RefillInterval: int32(cfg.RefillInterval),
+	}
 }
 
 // RateLimitServiceImpl implements the RateLimit service
@@ -166,14 +172,7 @@ type RateLimitServiceImpl struct {
 
 // Set configures a new rate limit or updates an existing one
 func (rs *RateLimitServiceImpl) Set(ctx context.Context, req *pbratelimit.SetRequest) (*pbratelimit.SetResponse, error) {
-	// Convert proto RateLimitConfig to service RateLimitConfig
-	config := &service.RateLimitConfig{
-		Algorithm:      req.Config.Algorithm,
-		Limit:          req.Config.Limit,
-		WindowSeconds:  int(req.Config.WindowSeconds),
-		RefillRate:     int(req.Config.RefillRate),
-		RefillInterval: int(req.Config.RefillInterval),
-	}
+	config := protoConfigToService(req.Config)
 
 	if err := rs.rateLimitService.SetConfig(ctx, req.Key, config); err != nil {
 		return nil, err
@@ -187,39 +186,33 @@ func (rs *RateLimitServiceImpl) Set(ctx context.Context, req *pbratelimit.SetReq
 
 // Check verifies if a request is allowed under the configured rate limit
 func (rs *RateLimitServiceImpl) Check(ctx context.Context, req *pbratelimit.CheckRequest) (*pbratelimit.CheckResponse, error) {
-	allowed, remaining, resetAt, retryAfter, err := rs.rateLimitService.CheckLimit(ctx, req.Key)
+	limitResp, err := rs.rateLimitService.CheckLimit(ctx, req.Key)
 	if err != nil {
 		return nil, err
 	}
 
 	return &pbratelimit.CheckResponse{
-		Allowed:    allowed,
-		Remaining:  remaining,
-		ResetAt:    resetAt,
-		RetryAfter: int32(retryAfter),
+		Allowed:    limitResp.Allowed,
+		Remaining:  limitResp.Remaining,
+		ResetAt:    limitResp.ResetAt,
+		RetryAfter: int32(limitResp.RetryAfter),
 	}, nil
 }
 
 // Status retrieves the current status of a rate limit configuration
 func (rs *RateLimitServiceImpl) Status(ctx context.Context, req *pbratelimit.StatusRequest) (*pbratelimit.StatusResponse, error) {
-	config, createdAt, updatedAt, nextReset, err := rs.rateLimitService.GetStatus(ctx, req.Key)
+	statusResp, err := rs.rateLimitService.GetStatus(ctx, req.Key)
 	if err != nil {
 		return nil, err
 	}
 
 	return &pbratelimit.StatusResponse{
 		Key:       req.Key,
-		Algorithm: config.Algorithm,
-		Config: &pbratelimit.RateLimitConfig{
-			Algorithm:      config.Algorithm,
-			Limit:          config.Limit,
-			WindowSeconds:  int32(config.WindowSeconds),
-			RefillRate:     int32(config.RefillRate),
-			RefillInterval: int32(config.RefillInterval),
-		},
-		CreatedAt: createdAt,
-		UpdatedAt: updatedAt,
-		NextReset: nextReset,
+		Algorithm: statusResp.Config.Algorithm,
+		Config:    serviceConfigToProto(statusResp.Config),
+		CreatedAt: statusResp.CreatedAt,
+		UpdatedAt: statusResp.UpdatedAt,
+		NextReset: statusResp.NextReset,
 	}, nil
 }
 
