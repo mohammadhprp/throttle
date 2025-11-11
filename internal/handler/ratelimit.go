@@ -49,7 +49,7 @@ type StatusResponse struct {
 
 // RateLimitHandler handles rate limit operations
 type RateLimitHandler struct {
-	store    storage.Store
+	Store    storage.Store
 	logger   *zap.Logger
 	limiters map[string]limiter.RateLimiter
 }
@@ -57,7 +57,7 @@ type RateLimitHandler struct {
 // NewRateLimitHandler creates a new rate limit handler
 func NewRateLimitHandler(store storage.Store, logger *zap.Logger) *RateLimitHandler {
 	return &RateLimitHandler{
-		store:    store,
+		Store:    store,
 		logger:   logger,
 		limiters: make(map[string]limiter.RateLimiter),
 	}
@@ -76,13 +76,13 @@ func (h *RateLimitHandler) Set() http.HandlerFunc {
 			return
 		}
 
-		if err := h.validateConfig(req.Config); err != nil {
+		if err := h.ValidateConfig(&req.Config); err != nil {
 			h.writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
 		// Store configuration in Redis
-		configKey := h.configKey(req.Key)
+		configKey := h.ConfigKey(req.Key)
 		configJSON, err := json.Marshal(req.Config)
 		if err != nil {
 			h.logger.Error("failed to marshal config", zap.Error(err))
@@ -105,14 +105,14 @@ func (h *RateLimitHandler) Set() http.HandlerFunc {
 		}
 
 		// Store both config and metadata
-		if err := h.store.Set(r.Context(), configKey, string(configJSON), 0); err != nil {
+		if err := h.Store.Set(r.Context(), configKey, string(configJSON), 0); err != nil {
 			h.logger.Error("failed to store config", zap.String("key", req.Key), zap.Error(err))
 			h.writeError(w, http.StatusInternalServerError, "failed to save configuration")
 			return
 		}
 
-		metadataKey := h.metadataKey(req.Key)
-		if err := h.store.Set(r.Context(), metadataKey, string(metadataJSON), 0); err != nil {
+		metadataKey := h.MetadataKey(req.Key)
+		if err := h.Store.Set(r.Context(), metadataKey, string(metadataJSON), 0); err != nil {
 			h.logger.Error("failed to store metadata", zap.String("key", req.Key), zap.Error(err))
 			h.writeError(w, http.StatusInternalServerError, "failed to save configuration")
 			return
@@ -145,7 +145,7 @@ func (h *RateLimitHandler) Check() http.HandlerFunc {
 		}
 
 		// Get configuration
-		config, err := h.getConfig(r.Context(), req.Key)
+		config, err := h.GetConfig(r.Context(), req.Key)
 		if err != nil {
 			h.logger.Error("failed to get config", zap.String("key", req.Key), zap.Error(err))
 			h.writeError(w, http.StatusNotFound, "rate limit not found")
@@ -153,8 +153,8 @@ func (h *RateLimitHandler) Check() http.HandlerFunc {
 		}
 
 		// Get or create limiter
-		limiterKey := h.limiterKey(req.Key, config.Algorithm)
-		rateLimiter, err := h.getOrCreateLimiter(limiterKey, config)
+		limiterKey := h.LimiterKey(req.Key, config.Algorithm)
+		rateLimiter, err := h.GetOrCreateLimiter(limiterKey, config)
 		if err != nil {
 			h.logger.Error("failed to create limiter", zap.String("key", req.Key), zap.Error(err))
 			h.writeError(w, http.StatusInternalServerError, "internal server error")
@@ -170,9 +170,9 @@ func (h *RateLimitHandler) Check() http.HandlerFunc {
 		}
 
 		// Calculate metrics for response
-		remaining := h.calculateRemaining(r.Context(), req.Key, config, allowed)
-		resetAt := h.calculateResetAt(config)
-		retryAfter := h.calculateRetryAfter(config)
+		remaining := h.CalculateRemaining(r.Context(), req.Key, config, allowed)
+		resetAt := h.CalculateResetAt(config)
+		retryAfter := h.CalculateRetryAfter(config)
 
 		resp := CheckResponse{
 			Allowed:    allowed,
@@ -212,7 +212,7 @@ func (h *RateLimitHandler) Status() http.HandlerFunc {
 		}
 
 		// Get configuration
-		config, err := h.getConfig(r.Context(), key)
+		config, err := h.GetConfig(r.Context(), key)
 		if err != nil {
 			h.logger.Error("failed to get config", zap.String("key", key), zap.Error(err))
 			h.writeError(w, http.StatusNotFound, "rate limit not found")
@@ -220,7 +220,7 @@ func (h *RateLimitHandler) Status() http.HandlerFunc {
 		}
 
 		// Get metadata
-		metadata, err := h.getMetadata(r.Context(), key)
+		metadata, err := h.GetMetadata(r.Context(), key)
 		if err != nil {
 			h.logger.Error("failed to get metadata", zap.String("key", key), zap.Error(err))
 			metadata = map[string]interface{}{
@@ -244,7 +244,7 @@ func (h *RateLimitHandler) Status() http.HandlerFunc {
 			Config:    config,
 			CreatedAt: createdAt,
 			UpdatedAt: updatedAt,
-			NextReset: h.calculateResetAt(config),
+			NextReset: h.CalculateResetAt(config),
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -265,7 +265,7 @@ func (h *RateLimitHandler) Reset() http.HandlerFunc {
 		}
 
 		// Get configuration to find limiter type
-		config, err := h.getConfig(r.Context(), key)
+		config, err := h.GetConfig(r.Context(), key)
 		if err != nil {
 			h.logger.Error("failed to get config", zap.String("key", key), zap.Error(err))
 			h.writeError(w, http.StatusNotFound, "rate limit not found")
@@ -273,8 +273,8 @@ func (h *RateLimitHandler) Reset() http.HandlerFunc {
 		}
 
 		// Get or create limiter and reset it
-		limiterKey := h.limiterKey(key, config.Algorithm)
-		rateLimiter, err := h.getOrCreateLimiter(limiterKey, config)
+		limiterKey := h.LimiterKey(key, config.Algorithm)
+		rateLimiter, err := h.GetOrCreateLimiter(limiterKey, config)
 		if err != nil {
 			h.logger.Error("failed to create limiter", zap.String("key", key), zap.Error(err))
 			h.writeError(w, http.StatusInternalServerError, "internal server error")
@@ -288,11 +288,11 @@ func (h *RateLimitHandler) Reset() http.HandlerFunc {
 		}
 
 		// Delete configuration and metadata
-		configKey := h.configKey(key)
-		metadataKey := h.metadataKey(key)
+		configKey := h.ConfigKey(key)
+		metadataKey := h.MetadataKey(key)
 
-		_ = h.store.Delete(r.Context(), configKey)
-		_ = h.store.Delete(r.Context(), metadataKey)
+		_ = h.Store.Delete(r.Context(), configKey)
+		_ = h.Store.Delete(r.Context(), metadataKey)
 
 		h.logger.Info("rate limit reset", zap.String("key", key))
 
@@ -307,8 +307,8 @@ func (h *RateLimitHandler) Reset() http.HandlerFunc {
 
 // Helper methods
 
-// validateConfig validates the rate limit configuration
-func (h *RateLimitHandler) validateConfig(cfg RateLimitConfig) error {
+// ValidateConfig validates the rate limit configuration
+func (h *RateLimitHandler) ValidateConfig(cfg *RateLimitConfig) error {
 	if cfg.Algorithm == "" {
 		return errors.New("algorithm is required")
 	}
@@ -344,10 +344,10 @@ func (h *RateLimitHandler) validateConfig(cfg RateLimitConfig) error {
 	return nil
 }
 
-// getConfig retrieves the configuration for a key
-func (h *RateLimitHandler) getConfig(ctx context.Context, key string) (*RateLimitConfig, error) {
-	configKey := h.configKey(key)
-	configStr, err := h.store.Get(ctx, configKey)
+// GetConfig retrieves the configuration for a key
+func (h *RateLimitHandler) GetConfig(ctx context.Context, key string) (*RateLimitConfig, error) {
+	configKey := h.ConfigKey(key)
+	configStr, err := h.Store.Get(ctx, configKey)
 	if err != nil {
 		return nil, err
 	}
@@ -364,10 +364,10 @@ func (h *RateLimitHandler) getConfig(ctx context.Context, key string) (*RateLimi
 	return &config, nil
 }
 
-// getMetadata retrieves the metadata for a key
-func (h *RateLimitHandler) getMetadata(ctx context.Context, key string) (map[string]interface{}, error) {
-	metadataKey := h.metadataKey(key)
-	metadataStr, err := h.store.Get(ctx, metadataKey)
+// GetMetadata retrieves the metadata for a key
+func (h *RateLimitHandler) GetMetadata(ctx context.Context, key string) (map[string]interface{}, error) {
+	metadataKey := h.MetadataKey(key)
+	metadataStr, err := h.Store.Get(ctx, metadataKey)
 	if err != nil {
 		return nil, err
 	}
@@ -384,8 +384,8 @@ func (h *RateLimitHandler) getMetadata(ctx context.Context, key string) (map[str
 	return metadata, nil
 }
 
-// getOrCreateLimiter gets an existing limiter or creates a new one
-func (h *RateLimitHandler) getOrCreateLimiter(limiterKey string, cfg *RateLimitConfig) (limiter.RateLimiter, error) {
+// GetOrCreateLimiter gets an existing limiter or creates a new one
+func (h *RateLimitHandler) GetOrCreateLimiter(limiterKey string, cfg *RateLimitConfig) (limiter.RateLimiter, error) {
 	if lim, ok := h.limiters[limiterKey]; ok {
 		return lim, nil
 	}
@@ -400,16 +400,16 @@ func (h *RateLimitHandler) getOrCreateLimiter(limiterKey string, cfg *RateLimitC
 	switch cfg.Algorithm {
 	case "token_bucket":
 		refillInterval := time.Duration(cfg.RefillInterval) * time.Second
-		lim = limiter.NewTokenBucket(h.store, float64(cfg.RefillRate), refillInterval, float64(cfg.Limit), h.logger)
+		lim = limiter.NewTokenBucket(h.Store, float64(cfg.RefillRate), refillInterval, float64(cfg.Limit), h.logger)
 
 	case "sliding_window":
-		lim = limiter.NewSlidingWindow(h.store, cfg.Limit, windowDuration, h.logger)
+		lim = limiter.NewSlidingWindow(h.Store, cfg.Limit, windowDuration, h.logger)
 
 	case "fixed_window":
-		lim = limiter.NewFixedWindow(h.store, cfg.Limit, windowDuration, h.logger)
+		lim = limiter.NewFixedWindow(h.Store, cfg.Limit, windowDuration, h.logger)
 
 	case "leaky_bucket":
-		lim = limiter.NewLeakyBucket(h.store, cfg.Limit, leakRate, windowDuration, h.logger)
+		lim = limiter.NewLeakyBucket(h.Store, cfg.Limit, leakRate, windowDuration, h.logger)
 
 	default:
 		return nil, fmt.Errorf("unsupported algorithm: %s", cfg.Algorithm)
@@ -419,8 +419,8 @@ func (h *RateLimitHandler) getOrCreateLimiter(limiterKey string, cfg *RateLimitC
 	return lim, nil
 }
 
-// calculateRemaining calculates the remaining requests/tokens
-func (h *RateLimitHandler) calculateRemaining(ctx context.Context, key string, cfg *RateLimitConfig, allowed bool) int64 {
+// CalculateRemaining calculates the remaining requests/tokens
+func (h *RateLimitHandler) CalculateRemaining(ctx context.Context, key string, cfg *RateLimitConfig, allowed bool) int64 {
 	// Simplified calculation based on algorithm
 	// This is a best-effort estimate since actual remaining depends on algorithm internals
 	remaining := cfg.Limit
@@ -430,8 +430,8 @@ func (h *RateLimitHandler) calculateRemaining(ctx context.Context, key string, c
 	return remaining
 }
 
-// calculateResetAt calculates the reset timestamp
-func (h *RateLimitHandler) calculateResetAt(cfg *RateLimitConfig) int64 {
+// CalculateResetAt calculates the reset timestamp
+func (h *RateLimitHandler) CalculateResetAt(cfg *RateLimitConfig) int64 {
 	// Window-based algorithms reset at the start of the next window
 	now := time.Now()
 	windowsSinceEpoch := now.Unix() / int64(cfg.WindowSeconds)
@@ -439,8 +439,8 @@ func (h *RateLimitHandler) calculateResetAt(cfg *RateLimitConfig) int64 {
 	return nextWindowStart
 }
 
-// calculateRetryAfter calculates seconds to wait before retry
-func (h *RateLimitHandler) calculateRetryAfter(cfg *RateLimitConfig) int {
+// CalculateRetryAfter calculates seconds to wait before retry
+func (h *RateLimitHandler) CalculateRetryAfter(cfg *RateLimitConfig) int {
 	// Calculate seconds until next window
 	now := time.Now()
 	windowsSinceEpoch := now.Unix() / int64(cfg.WindowSeconds)
@@ -452,18 +452,18 @@ func (h *RateLimitHandler) calculateRetryAfter(cfg *RateLimitConfig) int {
 	return retryAfter
 }
 
-// configKey generates a key for storing configuration
-func (h *RateLimitHandler) configKey(key string) string {
+// ConfigKey generates a key for storing configuration
+func (h *RateLimitHandler) ConfigKey(key string) string {
 	return fmt.Sprintf("ratelimit:config:%s", key)
 }
 
-// metadataKey generates a key for storing metadata
-func (h *RateLimitHandler) metadataKey(key string) string {
+// MetadataKey generates a key for storing metadata
+func (h *RateLimitHandler) MetadataKey(key string) string {
 	return fmt.Sprintf("ratelimit:metadata:%s", key)
 }
 
-// limiterKey generates a key for storing limiter instance
-func (h *RateLimitHandler) limiterKey(key, algorithm string) string {
+// LimiterKey generates a key for storing limiter instance
+func (h *RateLimitHandler) LimiterKey(key, algorithm string) string {
 	return fmt.Sprintf("%s:%s", key, algorithm)
 }
 
