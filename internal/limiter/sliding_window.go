@@ -88,12 +88,20 @@ func (sw *SlidingWindow) Allow(ctx context.Context, key string) (bool, error) {
 
 	// Remove timestamps outside the window
 	windowStart := now - sw.windowDuration.Nanoseconds()
-	filteredTimestamps := []int64{}
-	for _, ts := range state.Timestamps {
+
+	// Find the first valid timestamp - default to end if none are valid
+	validStartIdx := len(state.Timestamps)
+	for i, ts := range state.Timestamps {
 		if ts > windowStart {
-			filteredTimestamps = append(filteredTimestamps, ts)
+			validStartIdx = i
+			break
 		}
 	}
+
+	// Create filtered slice with exact capacity to avoid reallocation
+	validCount := len(state.Timestamps) - validStartIdx
+	filteredTimestamps := make([]int64, validCount, validCount+1)
+	copy(filteredTimestamps, state.Timestamps[validStartIdx:])
 
 	// Check if request is allowed
 	allowed := int64(len(filteredTimestamps)) < sw.maxRequests
