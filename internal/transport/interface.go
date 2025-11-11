@@ -32,6 +32,6 @@ type ServerConfig struct {
 
 // ServiceHandlers contains all service handlers
 type ServiceHandlers struct {
-	HealthCheck *handler.HealthCheckHanlder
+	HealthCheck *handler.HealthCheckHandler
 	RateLimit   *handler.RateLimitHandler
 }

@@ -1,50 +1,40 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
-	"time"
 
-	"github.com/mohammadhprp/throttle/internal/storage"
-	"go.uber.org/zap"
+	"github.com/mohammadhprp/throttle/internal/service"
 )
 
-type HealthCheckHanlder struct {
-	store  storage.Store
-	logger *zap.Logger
+type HealthCheckHandler struct {
+	service *service.HealthService
 }
 
-func NewHealthCheckHanlder(store storage.Store, logger *zap.Logger) *HealthCheckHanlder {
-	return &HealthCheckHanlder{
-		store:  store,
-		logger: logger,
+func NewHealthCheckHandler(healthService *service.HealthService) *HealthCheckHandler {
+	return &HealthCheckHandler{
+		service: healthService,
 	}
 }
 
 // HealthCheck returns a health check handler
-func (h *HealthCheckHanlder) HealthCheck() http.HandlerFunc {
+func (h *HealthCheckHandler) HealthCheck() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		status := map[string]string{
-			"status": "healthy",
-			"time":   time.Now().Format(time.RFC3339),
+		status, timestamp, err := h.service.GetHealthStatus(r.Context())
+
+		response := map[string]string{
+			"status": status,
+			"time":   timestamp,
 		}
 
-		// Check Redis connection
-		if err := h.store.Ping(r.Context()); err != nil {
-			status["status"] = "unhealthy"
-			status["error"] = err.Error()
-			w.WriteHeader(http.StatusServiceUnavailable)
-		} else {
-			w.WriteHeader(http.StatusOK)
+		statusCode := http.StatusOK
+		if err != nil {
+			response["error"] = err.Error()
+			statusCode = http.StatusServiceUnavailable
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(status)
+		w.WriteHeader(statusCode)
+		json.NewEncoder(w).Encode(response)
 	}
-}
-
-// Ping verifies connectivity with the underlying store for non-HTTP health checks.
-func (h *HealthCheckHanlder) Ping(ctx context.Context) error {
-	return h.store.Ping(ctx)
 }

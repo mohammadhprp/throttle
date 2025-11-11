@@ -37,14 +37,12 @@ type StatusResponse struct {
 // RateLimitHandler handles HTTP rate limit operations
 type RateLimitHandler struct {
 	service *service.RateLimitService
-	logger  *zap.Logger
 }
 
 // NewRateLimitHandler creates a new rate limit handler
-func NewRateLimitHandler(svc *service.RateLimitService, logger *zap.Logger) *RateLimitHandler {
+func NewRateLimitHandler(svc *service.RateLimitService) *RateLimitHandler {
 	return &RateLimitHandler{
 		service: svc,
-		logger:  logger,
 	}
 }
 
@@ -52,7 +50,7 @@ func NewRateLimitHandler(svc *service.RateLimitService, logger *zap.Logger) *Rat
 func (h *RateLimitHandler) Set() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Key    string                      `json:"key"`
+			Key    string                  `json:"key"`
 			Config service.RateLimitConfig `json:"config"`
 		}
 
@@ -62,12 +60,12 @@ func (h *RateLimitHandler) Set() http.HandlerFunc {
 		}
 
 		if err := h.service.SetConfig(r.Context(), req.Key, &req.Config); err != nil {
-			h.logger.Error("failed to set rate limit", zap.String("key", req.Key), zap.Error(err))
+			h.service.Logger.Error("failed to set rate limit", zap.String("key", req.Key), zap.Error(err))
 			h.writeError(w, http.StatusInternalServerError, "failed to save configuration")
 			return
 		}
 
-		h.logger.Info("rate limit configured", zap.String("key", req.Key), zap.String("algorithm", req.Config.Algorithm))
+		h.service.Logger.Info("rate limit configured", zap.String("key", req.Key), zap.String("algorithm", req.Config.Algorithm))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
@@ -95,7 +93,7 @@ func (h *RateLimitHandler) Check() http.HandlerFunc {
 
 		allowed, remaining, resetAt, retryAfter, err := h.service.CheckLimit(r.Context(), req.Key)
 		if err != nil {
-			h.logger.Error("failed to check rate limit", zap.String("key", req.Key), zap.Error(err))
+			h.service.Logger.Error("failed to check rate limit", zap.String("key", req.Key), zap.Error(err))
 			h.writeError(w, http.StatusNotFound, "rate limit not found")
 			return
 		}
@@ -139,7 +137,7 @@ func (h *RateLimitHandler) Status() http.HandlerFunc {
 
 		config, createdAt, updatedAt, nextReset, err := h.service.GetStatus(r.Context(), key)
 		if err != nil {
-			h.logger.Error("failed to get status", zap.String("key", key), zap.Error(err))
+			h.service.Logger.Error("failed to get status", zap.String("key", key), zap.Error(err))
 			h.writeError(w, http.StatusNotFound, "rate limit not found")
 			return
 		}
@@ -171,12 +169,12 @@ func (h *RateLimitHandler) Reset() http.HandlerFunc {
 		}
 
 		if err := h.service.ResetLimit(r.Context(), key); err != nil {
-			h.logger.Error("failed to reset rate limit", zap.String("key", key), zap.Error(err))
+			h.service.Logger.Error("failed to reset rate limit", zap.String("key", key), zap.Error(err))
 			h.writeError(w, http.StatusNotFound, "rate limit not found")
 			return
 		}
 
-		h.logger.Info("rate limit reset", zap.String("key", key))
+		h.service.Logger.Info("rate limit reset", zap.String("key", key))
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

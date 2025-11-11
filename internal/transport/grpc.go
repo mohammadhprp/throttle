@@ -15,23 +15,25 @@ import (
 
 // GRPCServer implements the Server interface for gRPC transport
 type GRPCServer struct {
-	server              *grpc.Server
-	address             string
-	logger              *zap.Logger
-	handlers            *ServiceHandlers
-	rateLimitService    *service.RateLimitService
+	server           *grpc.Server
+	address          string
+	logger           *zap.Logger
+	handlers         *ServiceHandlers
+	healthService    *service.HealthService
+	rateLimitService *service.RateLimitService
 }
 
 // NewGRPCServer creates a new gRPC server
 func NewGRPCServer(cfg ServerConfig) *GRPCServer {
 	gsrv := grpc.NewServer()
 
-	// Create rate limit service
+	// Create services
+	healthService := service.NewHealthService(cfg.Store, cfg.Logger)
 	rateLimitService := service.NewRateLimitService(cfg.Store, cfg.Logger)
 
 	handlers := &ServiceHandlers{
-		HealthCheck: handler.NewHealthCheckHanlder(cfg.Store, cfg.Logger),
-		RateLimit:   handler.NewRateLimitHandler(rateLimitService, cfg.Logger),
+		HealthCheck: handler.NewHealthCheckHandler(healthService),
+		RateLimit:   handler.NewRateLimitHandler(rateLimitService),
 	}
 
 	grpcSrv := &GRPCServer{
@@ -39,6 +41,7 @@ func NewGRPCServer(cfg ServerConfig) *GRPCServer {
 		logger:           cfg.Logger,
 		handlers:         handlers,
 		server:           gsrv,
+		healthService:    healthService,
 		rateLimitService: rateLimitService,
 	}
 
@@ -49,7 +52,7 @@ func NewGRPCServer(cfg ServerConfig) *GRPCServer {
 // registerServices registers all gRPC services
 func (gs *GRPCServer) registerServices() {
 	pbhealth.RegisterHealthServer(gs.server, &HealthServiceImpl{
-		healthCheck: gs.handlers.HealthCheck,
+		healthService: gs.healthService,
 	})
 	pbratelimit.RegisterRateLimitServer(gs.server, &RateLimitServiceImpl{
 		rateLimitService: gs.rateLimitService,
@@ -101,7 +104,7 @@ func (gs *GRPCServer) Addr() string {
 // HealthServiceImpl implements the Health service
 type HealthServiceImpl struct {
 	pbhealth.UnimplementedHealthServer
-	healthCheck *handler.HealthCheckHanlder
+	healthService *service.HealthService
 }
 
 func (hs *HealthServiceImpl) Check(ctx context.Context, _ *pbhealth.HealthCheckRequest) (*pbhealth.HealthCheckResponse, error) {
@@ -140,7 +143,7 @@ func (hs *HealthServiceImpl) Watch(_ *pbhealth.HealthCheckRequest, stream grpc.S
 }
 
 func (hs *HealthServiceImpl) currentStatus(ctx context.Context) pbhealth.HealthCheckResponse_ServingStatus {
-	if hs == nil || hs.healthCheck == nil {
+	if hs == nil || hs.healthService == nil {
 		return pbhealth.HealthCheckResponse_UNKNOWN
 	}
 
@@ -148,7 +151,7 @@ func (hs *HealthServiceImpl) currentStatus(ctx context.Context) pbhealth.HealthC
 		ctx = context.Background()
 	}
 
-	if err := hs.healthCheck.Ping(ctx); err != nil {
+	if err := hs.healthService.Ping(ctx); err != nil {
 		return pbhealth.HealthCheckResponse_NOT_SERVING
 	}
 

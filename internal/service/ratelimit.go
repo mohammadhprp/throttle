@@ -24,16 +24,16 @@ type RateLimitConfig struct {
 // RateLimitService provides business logic for rate limiting
 type RateLimitService struct {
 	store    storage.Store
-	logger   *zap.Logger
 	limiters map[string]limiter.RateLimiter
+	Logger   *zap.Logger
 }
 
 // NewRateLimitService creates a new rate limit service
 func NewRateLimitService(store storage.Store, logger *zap.Logger) *RateLimitService {
 	return &RateLimitService{
 		store:    store,
-		logger:   logger,
 		limiters: make(map[string]limiter.RateLimiter),
+		Logger:   logger,
 	}
 }
 
@@ -130,16 +130,16 @@ func (s *RateLimitService) GetOrCreateLimiter(limiterKey string, cfg *RateLimitC
 	switch cfg.Algorithm {
 	case "token_bucket":
 		refillInterval := time.Duration(cfg.RefillInterval) * time.Second
-		lim = limiter.NewTokenBucket(s.store, float64(cfg.RefillRate), refillInterval, float64(cfg.Limit), s.logger)
+		lim = limiter.NewTokenBucket(s.store, float64(cfg.RefillRate), refillInterval, float64(cfg.Limit), s.Logger)
 
 	case "sliding_window":
-		lim = limiter.NewSlidingWindow(s.store, cfg.Limit, windowDuration, s.logger)
+		lim = limiter.NewSlidingWindow(s.store, cfg.Limit, windowDuration, s.Logger)
 
 	case "fixed_window":
-		lim = limiter.NewFixedWindow(s.store, cfg.Limit, windowDuration, s.logger)
+		lim = limiter.NewFixedWindow(s.store, cfg.Limit, windowDuration, s.Logger)
 
 	case "leaky_bucket":
-		lim = limiter.NewLeakyBucket(s.store, cfg.Limit, leakRate, windowDuration, s.logger)
+		lim = limiter.NewLeakyBucket(s.store, cfg.Limit, leakRate, windowDuration, s.Logger)
 
 	default:
 		return nil, fmt.Errorf("unsupported algorithm: %s", cfg.Algorithm)
