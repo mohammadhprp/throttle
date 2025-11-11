@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -91,30 +92,31 @@ func (h *RateLimitHandler) Check() http.HandlerFunc {
 			return
 		}
 
-		allowed, remaining, resetAt, retryAfter, err := h.service.CheckLimit(r.Context(), req.Key)
+		limitResp, err := h.service.CheckLimit(r.Context(), req.Key)
 		if err != nil {
 			h.service.Logger.Error("failed to check rate limit", zap.String("key", req.Key), zap.Error(err))
-			h.writeError(w, http.StatusNotFound, "rate limit not found")
+			statusCode := h.getStatusCodeForError(err)
+			h.writeError(w, statusCode, err.Error())
 			return
 		}
 
 		resp := CheckResponse{
-			Allowed:    allowed,
-			Remaining:  remaining,
-			ResetAt:    resetAt,
-			RetryAfter: retryAfter,
+			Allowed:    limitResp.Allowed,
+			Remaining:  limitResp.Remaining,
+			ResetAt:    limitResp.ResetAt,
+			RetryAfter: limitResp.RetryAfter,
 		}
 
 		// Set rate limit headers
 		w.Header().Set("X-RateLimit-Limit", "TBD")
-		w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
-		w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", resetAt))
-		if !allowed {
-			w.Header().Set("X-RateLimit-Retry-After", fmt.Sprintf("%d", retryAfter))
+		w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", limitResp.Remaining))
+		w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", limitResp.ResetAt))
+		if !limitResp.Allowed {
+			w.Header().Set("X-RateLimit-Retry-After", fmt.Sprintf("%d", limitResp.RetryAfter))
 		}
 		w.Header().Set("Content-Type", "application/json")
 
-		if !allowed {
+		if !limitResp.Allowed {
 			w.WriteHeader(http.StatusTooManyRequests)
 		} else {
 			w.WriteHeader(http.StatusOK)
@@ -135,20 +137,21 @@ func (h *RateLimitHandler) Status() http.HandlerFunc {
 			return
 		}
 
-		config, createdAt, updatedAt, nextReset, err := h.service.GetStatus(r.Context(), key)
+		statusResp, err := h.service.GetStatus(r.Context(), key)
 		if err != nil {
 			h.service.Logger.Error("failed to get status", zap.String("key", key), zap.Error(err))
-			h.writeError(w, http.StatusNotFound, "rate limit not found")
+			statusCode := h.getStatusCodeForError(err)
+			h.writeError(w, statusCode, err.Error())
 			return
 		}
 
 		resp := StatusResponse{
 			Key:       key,
-			Algorithm: config.Algorithm,
-			Config:    config,
-			CreatedAt: createdAt,
-			UpdatedAt: updatedAt,
-			NextReset: nextReset,
+			Algorithm: statusResp.Config.Algorithm,
+			Config:    statusResp.Config,
+			CreatedAt: statusResp.CreatedAt,
+			UpdatedAt: statusResp.UpdatedAt,
+			NextReset: statusResp.NextReset,
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -170,7 +173,8 @@ func (h *RateLimitHandler) Reset() http.HandlerFunc {
 
 		if err := h.service.ResetLimit(r.Context(), key); err != nil {
 			h.service.Logger.Error("failed to reset rate limit", zap.String("key", key), zap.Error(err))
-			h.writeError(w, http.StatusNotFound, "rate limit not found")
+			statusCode := h.getStatusCodeForError(err)
+			h.writeError(w, statusCode, err.Error())
 			return
 		}
 
@@ -192,4 +196,13 @@ func (h *RateLimitHandler) writeError(w http.ResponseWriter, statusCode int, mes
 	json.NewEncoder(w).Encode(map[string]string{
 		"error": message,
 	})
+}
+
+// getStatusCodeForError determines the appropriate HTTP status code for an error
+func (h *RateLimitHandler) getStatusCodeForError(err error) int {
+	if errors.Is(err, service.ErrNotFound) {
+		return http.StatusNotFound
+	}
+	// Default to internal server error for other errors (storage failures, parsing, etc.)
+	return http.StatusInternalServerError
 }
