@@ -2,11 +2,13 @@ package transport
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"time"
 
 	"github.com/mohammadhprp/throttle/internal/handler"
-	pb "github.com/mohammadhprp/throttle/proto/health"
+	pbhealth "github.com/mohammadhprp/throttle/proto/health"
+	pbratelimit "github.com/mohammadhprp/throttle/proto/ratelimit"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
@@ -25,6 +27,7 @@ func NewGRPCServer(cfg ServerConfig) *GRPCServer {
 
 	handlers := &ServiceHandlers{
 		HealthCheck: handler.NewHealthCheckHanlder(cfg.Store, cfg.Logger),
+		RateLimit:   handler.NewRateLimitHandler(cfg.Store, cfg.Logger),
 	}
 
 	grpcSrv := &GRPCServer{
@@ -40,8 +43,11 @@ func NewGRPCServer(cfg ServerConfig) *GRPCServer {
 
 // registerServices registers all gRPC services
 func (gs *GRPCServer) registerServices() {
-	pb.RegisterHealthServer(gs.server, &HealthServiceImpl{
+	pbhealth.RegisterHealthServer(gs.server, &HealthServiceImpl{
 		healthCheck: gs.handlers.HealthCheck,
+	})
+	pbratelimit.RegisterRateLimitServer(gs.server, &RateLimitServiceImpl{
+		rateLimit: gs.handlers.RateLimit,
 	})
 }
 
@@ -89,21 +95,21 @@ func (gs *GRPCServer) Addr() string {
 
 // HealthServiceImpl implements the Health service
 type HealthServiceImpl struct {
-	pb.UnimplementedHealthServer
+	pbhealth.UnimplementedHealthServer
 	healthCheck *handler.HealthCheckHanlder
 }
 
-func (hs *HealthServiceImpl) Check(ctx context.Context, _ *pb.HealthCheckRequest) (*pb.HealthCheckResponse, error) {
+func (hs *HealthServiceImpl) Check(ctx context.Context, _ *pbhealth.HealthCheckRequest) (*pbhealth.HealthCheckResponse, error) {
 	status := hs.currentStatus(ctx)
-	return &pb.HealthCheckResponse{
+	return &pbhealth.HealthCheckResponse{
 		Status: status,
 	}, nil
 }
 
-func (hs *HealthServiceImpl) Watch(_ *pb.HealthCheckRequest, stream grpc.ServerStreamingServer[pb.HealthCheckResponse]) error {
+func (hs *HealthServiceImpl) Watch(_ *pbhealth.HealthCheckRequest, stream grpc.ServerStreamingServer[pbhealth.HealthCheckResponse]) error {
 	ctx := stream.Context()
 	status := hs.currentStatus(ctx)
-	if err := stream.Send(&pb.HealthCheckResponse{Status: status}); err != nil {
+	if err := stream.Send(&pbhealth.HealthCheckResponse{Status: status}); err != nil {
 		return err
 	}
 
@@ -121,16 +127,16 @@ func (hs *HealthServiceImpl) Watch(_ *pb.HealthCheckRequest, stream grpc.ServerS
 			}
 
 			status = nextStatus
-			if err := stream.Send(&pb.HealthCheckResponse{Status: status}); err != nil {
+			if err := stream.Send(&pbhealth.HealthCheckResponse{Status: status}); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-func (hs *HealthServiceImpl) currentStatus(ctx context.Context) pb.HealthCheckResponse_ServingStatus {
+func (hs *HealthServiceImpl) currentStatus(ctx context.Context) pbhealth.HealthCheckResponse_ServingStatus {
 	if hs == nil || hs.healthCheck == nil {
-		return pb.HealthCheckResponse_UNKNOWN
+		return pbhealth.HealthCheckResponse_UNKNOWN
 	}
 
 	if ctx == nil {
@@ -138,8 +144,174 @@ func (hs *HealthServiceImpl) currentStatus(ctx context.Context) pb.HealthCheckRe
 	}
 
 	if err := hs.healthCheck.Ping(ctx); err != nil {
-		return pb.HealthCheckResponse_NOT_SERVING
+		return pbhealth.HealthCheckResponse_NOT_SERVING
 	}
 
-	return pb.HealthCheckResponse_SERVING
+	return pbhealth.HealthCheckResponse_SERVING
+}
+
+// RateLimitServiceImpl implements the RateLimit service
+type RateLimitServiceImpl struct {
+	pbratelimit.UnimplementedRateLimitServer
+	rateLimit *handler.RateLimitHandler
+}
+
+// Set configures a new rate limit or updates an existing one
+func (rs *RateLimitServiceImpl) Set(ctx context.Context, req *pbratelimit.SetRequest) (*pbratelimit.SetResponse, error) {
+	// Convert proto RateLimitConfig to handler RateLimitConfig
+	config := &handler.RateLimitConfig{
+		Algorithm:      req.Config.Algorithm,
+		Limit:          req.Config.Limit,
+		WindowSeconds:  int(req.Config.WindowSeconds),
+		RefillRate:     int(req.Config.RefillRate),
+		RefillInterval: int(req.Config.RefillInterval),
+	}
+
+	// Validate config
+	if err := rs.rateLimit.ValidateConfig(config); err != nil {
+		return nil, err
+	}
+
+	// Store configuration
+	configKey := rs.rateLimit.ConfigKey(req.Key)
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	metadata := map[string]interface{}{
+		"config":     config,
+		"created_at": now.Unix(),
+		"updated_at": now.Unix(),
+	}
+
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return nil, err
+	}
+
+	// Store both config and metadata
+	if err := rs.rateLimit.Store.Set(ctx, configKey, string(configJSON), 0); err != nil {
+		return nil, err
+	}
+
+	metadataKey := rs.rateLimit.MetadataKey(req.Key)
+	if err := rs.rateLimit.Store.Set(ctx, metadataKey, string(metadataJSON), 0); err != nil {
+		return nil, err
+	}
+
+	return &pbratelimit.SetResponse{
+		Message: "rate limit configured",
+		Key:     req.Key,
+	}, nil
+}
+
+// Check verifies if a request is allowed under the configured rate limit
+func (rs *RateLimitServiceImpl) Check(ctx context.Context, req *pbratelimit.CheckRequest) (*pbratelimit.CheckResponse, error) {
+	// Get configuration
+	config, err := rs.rateLimit.GetConfig(ctx, req.Key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get or create limiter
+	limiterKey := rs.rateLimit.LimiterKey(req.Key, config.Algorithm)
+	rateLimiter, err := rs.rateLimit.GetOrCreateLimiter(limiterKey, config)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if request is allowed
+	allowed, err := rateLimiter.Allow(ctx, req.Key)
+	if err != nil {
+		// Fail open on error
+		allowed = true
+	}
+
+	// Calculate metrics for response
+	remaining := rs.rateLimit.CalculateRemaining(ctx, req.Key, config, allowed)
+	resetAt := rs.rateLimit.CalculateResetAt(config)
+	retryAfter := rs.rateLimit.CalculateRetryAfter(config)
+
+	return &pbratelimit.CheckResponse{
+		Allowed:    allowed,
+		Remaining:  remaining,
+		ResetAt:    resetAt,
+		RetryAfter: int32(retryAfter),
+	}, nil
+}
+
+// Status retrieves the current status of a rate limit configuration
+func (rs *RateLimitServiceImpl) Status(ctx context.Context, req *pbratelimit.StatusRequest) (*pbratelimit.StatusResponse, error) {
+	// Get configuration
+	config, err := rs.rateLimit.GetConfig(ctx, req.Key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get metadata
+	metadata, err := rs.rateLimit.GetMetadata(ctx, req.Key)
+	if err != nil {
+		metadata = map[string]interface{}{
+			"created_at": time.Now().Unix(),
+			"updated_at": time.Now().Unix(),
+		}
+	}
+
+	createdAt := int64(0)
+	updatedAt := int64(0)
+	if ca, ok := metadata["created_at"].(float64); ok {
+		createdAt = int64(ca)
+	}
+	if ua, ok := metadata["updated_at"].(float64); ok {
+		updatedAt = int64(ua)
+	}
+
+	return &pbratelimit.StatusResponse{
+		Key:       req.Key,
+		Algorithm: config.Algorithm,
+		Config: &pbratelimit.RateLimitConfig{
+			Algorithm:      config.Algorithm,
+			Limit:          config.Limit,
+			WindowSeconds:  int32(config.WindowSeconds),
+			RefillRate:     int32(config.RefillRate),
+			RefillInterval: int32(config.RefillInterval),
+		},
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+		NextReset: rs.rateLimit.CalculateResetAt(config),
+	}, nil
+}
+
+// Reset resets a rate limit configuration and clears its state
+func (rs *RateLimitServiceImpl) Reset(ctx context.Context, req *pbratelimit.ResetRequest) (*pbratelimit.ResetResponse, error) {
+	// Get configuration to find limiter type
+	config, err := rs.rateLimit.GetConfig(ctx, req.Key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get or create limiter and reset it
+	limiterKey := rs.rateLimit.LimiterKey(req.Key, config.Algorithm)
+	rateLimiter, err := rs.rateLimit.GetOrCreateLimiter(limiterKey, config)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := rateLimiter.Reset(ctx, req.Key); err != nil {
+		return nil, err
+	}
+
+	// Delete configuration and metadata
+	configKey := rs.rateLimit.ConfigKey(req.Key)
+	metadataKey := rs.rateLimit.MetadataKey(req.Key)
+
+	_ = rs.rateLimit.Store.Delete(ctx, configKey)
+	_ = rs.rateLimit.Store.Delete(ctx, metadataKey)
+
+	return &pbratelimit.ResetResponse{
+		Message: "rate limit reset",
+		Key:     req.Key,
+	}, nil
 }
