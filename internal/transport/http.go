@@ -7,32 +7,38 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/mohammadhprp/throttle/internal/handler"
+	"github.com/mohammadhprp/throttle/internal/service"
 	"go.uber.org/zap"
 )
 
 // HTTPServer implements the Server interface for HTTP transport
 type HTTPServer struct {
-	server   *http.Server
-	router   *mux.Router
-	address  string
-	logger   *zap.Logger
-	handlers *ServiceHandlers
+	server              *http.Server
+	router              *mux.Router
+	address             string
+	logger              *zap.Logger
+	handlers            *ServiceHandlers
+	rateLimitService    *service.RateLimitService
 }
 
 // NewHTTPServer creates a new HTTP server
 func NewHTTPServer(cfg ServerConfig) *HTTPServer {
 	router := mux.NewRouter()
 
+	// Create rate limit service
+	rateLimitService := service.NewRateLimitService(cfg.Store, cfg.Logger)
+
 	handlers := &ServiceHandlers{
 		HealthCheck: handler.NewHealthCheckHanlder(cfg.Store, cfg.Logger),
-		RateLimit:   handler.NewRateLimitHandler(cfg.Store, cfg.Logger),
+		RateLimit:   handler.NewRateLimitHandler(rateLimitService, cfg.Logger),
 	}
 
 	hs := &HTTPServer{
-		address:  cfg.Address,
-		logger:   cfg.Logger,
-		handlers: handlers,
-		router:   router,
+		address:           cfg.Address,
+		logger:            cfg.Logger,
+		handlers:          handlers,
+		router:            router,
+		rateLimitService:  rateLimitService,
 		server: &http.Server{
 			Addr:         cfg.Address,
 			Handler:      router,

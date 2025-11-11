@@ -2,11 +2,11 @@ package transport
 
 import (
 	"context"
-	"encoding/json"
 	"net"
 	"time"
 
 	"github.com/mohammadhprp/throttle/internal/handler"
+	"github.com/mohammadhprp/throttle/internal/service"
 	pbhealth "github.com/mohammadhprp/throttle/proto/health"
 	pbratelimit "github.com/mohammadhprp/throttle/proto/ratelimit"
 	"go.uber.org/zap"
@@ -15,26 +15,31 @@ import (
 
 // GRPCServer implements the Server interface for gRPC transport
 type GRPCServer struct {
-	server   *grpc.Server
-	address  string
-	logger   *zap.Logger
-	handlers *ServiceHandlers
+	server              *grpc.Server
+	address             string
+	logger              *zap.Logger
+	handlers            *ServiceHandlers
+	rateLimitService    *service.RateLimitService
 }
 
 // NewGRPCServer creates a new gRPC server
 func NewGRPCServer(cfg ServerConfig) *GRPCServer {
 	gsrv := grpc.NewServer()
 
+	// Create rate limit service
+	rateLimitService := service.NewRateLimitService(cfg.Store, cfg.Logger)
+
 	handlers := &ServiceHandlers{
 		HealthCheck: handler.NewHealthCheckHanlder(cfg.Store, cfg.Logger),
-		RateLimit:   handler.NewRateLimitHandler(cfg.Store, cfg.Logger),
+		RateLimit:   handler.NewRateLimitHandler(rateLimitService, cfg.Logger),
 	}
 
 	grpcSrv := &GRPCServer{
-		address:  cfg.Address,
-		logger:   cfg.Logger,
-		handlers: handlers,
-		server:   gsrv,
+		address:          cfg.Address,
+		logger:           cfg.Logger,
+		handlers:         handlers,
+		server:           gsrv,
+		rateLimitService: rateLimitService,
 	}
 
 	grpcSrv.registerServices()
@@ -47,7 +52,7 @@ func (gs *GRPCServer) registerServices() {
 		healthCheck: gs.handlers.HealthCheck,
 	})
 	pbratelimit.RegisterRateLimitServer(gs.server, &RateLimitServiceImpl{
-		rateLimit: gs.handlers.RateLimit,
+		rateLimitService: gs.rateLimitService,
 	})
 }
 
@@ -153,13 +158,13 @@ func (hs *HealthServiceImpl) currentStatus(ctx context.Context) pbhealth.HealthC
 // RateLimitServiceImpl implements the RateLimit service
 type RateLimitServiceImpl struct {
 	pbratelimit.UnimplementedRateLimitServer
-	rateLimit *handler.RateLimitHandler
+	rateLimitService *service.RateLimitService
 }
 
 // Set configures a new rate limit or updates an existing one
 func (rs *RateLimitServiceImpl) Set(ctx context.Context, req *pbratelimit.SetRequest) (*pbratelimit.SetResponse, error) {
-	// Convert proto RateLimitConfig to handler RateLimitConfig
-	config := &handler.RateLimitConfig{
+	// Convert proto RateLimitConfig to service RateLimitConfig
+	config := &service.RateLimitConfig{
 		Algorithm:      req.Config.Algorithm,
 		Limit:          req.Config.Limit,
 		WindowSeconds:  int(req.Config.WindowSeconds),
@@ -167,37 +172,7 @@ func (rs *RateLimitServiceImpl) Set(ctx context.Context, req *pbratelimit.SetReq
 		RefillInterval: int(req.Config.RefillInterval),
 	}
 
-	// Validate config
-	if err := rs.rateLimit.ValidateConfig(config); err != nil {
-		return nil, err
-	}
-
-	// Store configuration
-	configKey := rs.rateLimit.ConfigKey(req.Key)
-	configJSON, err := json.Marshal(config)
-	if err != nil {
-		return nil, err
-	}
-
-	now := time.Now()
-	metadata := map[string]interface{}{
-		"config":     config,
-		"created_at": now.Unix(),
-		"updated_at": now.Unix(),
-	}
-
-	metadataJSON, err := json.Marshal(metadata)
-	if err != nil {
-		return nil, err
-	}
-
-	// Store both config and metadata
-	if err := rs.rateLimit.Store.Set(ctx, configKey, string(configJSON), 0); err != nil {
-		return nil, err
-	}
-
-	metadataKey := rs.rateLimit.MetadataKey(req.Key)
-	if err := rs.rateLimit.Store.Set(ctx, metadataKey, string(metadataJSON), 0); err != nil {
+	if err := rs.rateLimitService.SetConfig(ctx, req.Key, config); err != nil {
 		return nil, err
 	}
 
@@ -209,30 +184,10 @@ func (rs *RateLimitServiceImpl) Set(ctx context.Context, req *pbratelimit.SetReq
 
 // Check verifies if a request is allowed under the configured rate limit
 func (rs *RateLimitServiceImpl) Check(ctx context.Context, req *pbratelimit.CheckRequest) (*pbratelimit.CheckResponse, error) {
-	// Get configuration
-	config, err := rs.rateLimit.GetConfig(ctx, req.Key)
+	allowed, remaining, resetAt, retryAfter, err := rs.rateLimitService.CheckLimit(ctx, req.Key)
 	if err != nil {
 		return nil, err
 	}
-
-	// Get or create limiter
-	limiterKey := rs.rateLimit.LimiterKey(req.Key, config.Algorithm)
-	rateLimiter, err := rs.rateLimit.GetOrCreateLimiter(limiterKey, config)
-	if err != nil {
-		return nil, err
-	}
-
-	// Check if request is allowed
-	allowed, err := rateLimiter.Allow(ctx, req.Key)
-	if err != nil {
-		// Fail open on error
-		allowed = true
-	}
-
-	// Calculate metrics for response
-	remaining := rs.rateLimit.CalculateRemaining(ctx, req.Key, config, allowed)
-	resetAt := rs.rateLimit.CalculateResetAt(config)
-	retryAfter := rs.rateLimit.CalculateRetryAfter(config)
 
 	return &pbratelimit.CheckResponse{
 		Allowed:    allowed,
@@ -244,28 +199,9 @@ func (rs *RateLimitServiceImpl) Check(ctx context.Context, req *pbratelimit.Chec
 
 // Status retrieves the current status of a rate limit configuration
 func (rs *RateLimitServiceImpl) Status(ctx context.Context, req *pbratelimit.StatusRequest) (*pbratelimit.StatusResponse, error) {
-	// Get configuration
-	config, err := rs.rateLimit.GetConfig(ctx, req.Key)
+	config, createdAt, updatedAt, nextReset, err := rs.rateLimitService.GetStatus(ctx, req.Key)
 	if err != nil {
 		return nil, err
-	}
-
-	// Get metadata
-	metadata, err := rs.rateLimit.GetMetadata(ctx, req.Key)
-	if err != nil {
-		metadata = map[string]interface{}{
-			"created_at": time.Now().Unix(),
-			"updated_at": time.Now().Unix(),
-		}
-	}
-
-	createdAt := int64(0)
-	updatedAt := int64(0)
-	if ca, ok := metadata["created_at"].(float64); ok {
-		createdAt = int64(ca)
-	}
-	if ua, ok := metadata["updated_at"].(float64); ok {
-		updatedAt = int64(ua)
 	}
 
 	return &pbratelimit.StatusResponse{
@@ -280,35 +216,15 @@ func (rs *RateLimitServiceImpl) Status(ctx context.Context, req *pbratelimit.Sta
 		},
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,
-		NextReset: rs.rateLimit.CalculateResetAt(config),
+		NextReset: nextReset,
 	}, nil
 }
 
 // Reset resets a rate limit configuration and clears its state
 func (rs *RateLimitServiceImpl) Reset(ctx context.Context, req *pbratelimit.ResetRequest) (*pbratelimit.ResetResponse, error) {
-	// Get configuration to find limiter type
-	config, err := rs.rateLimit.GetConfig(ctx, req.Key)
-	if err != nil {
+	if err := rs.rateLimitService.ResetLimit(ctx, req.Key); err != nil {
 		return nil, err
 	}
-
-	// Get or create limiter and reset it
-	limiterKey := rs.rateLimit.LimiterKey(req.Key, config.Algorithm)
-	rateLimiter, err := rs.rateLimit.GetOrCreateLimiter(limiterKey, config)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := rateLimiter.Reset(ctx, req.Key); err != nil {
-		return nil, err
-	}
-
-	// Delete configuration and metadata
-	configKey := rs.rateLimit.ConfigKey(req.Key)
-	metadataKey := rs.rateLimit.MetadataKey(req.Key)
-
-	_ = rs.rateLimit.Store.Delete(ctx, configKey)
-	_ = rs.rateLimit.Store.Delete(ctx, metadataKey)
 
 	return &pbratelimit.ResetResponse{
 		Message: "rate limit reset",
